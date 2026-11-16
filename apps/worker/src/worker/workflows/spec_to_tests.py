@@ -135,6 +135,14 @@ class SpecToTests:
         round_no = 0
         while not change_id:
             if round_no >= MAX_SPEC_ROUNDS:
+                await test_runner.open_approval(
+                    subject=f"Interview spec non convergé après {MAX_SPEC_ROUNDS} tours",
+                    payload=(f"L'agent spec n'a ni posé de question ni renvoyé de CHANGE_ID "
+                             f"en {MAX_SPEC_ROUNDS} tours — le workflow va échouer (escalade).\n"
+                             f"Transcript : python scripts/status.py {execution_id}\n"
+                             f"Arrêter proprement : python scripts/approve.py {execution_id} reject"),
+                    execution_id=execution_id,
+                )
                 raise RuntimeError(
                     f"interview spec non convergé après {MAX_SPEC_ROUNDS} "
                     f"tours — escalade humaine (query `state`, signal `reject`)")
@@ -160,6 +168,14 @@ class SpecToTests:
                         lambda: self.replies > consumed or self.verdict is not None,
                         timeout=GATE_TIMEOUT)
                 except asyncio.TimeoutError:
+                    await test_runner.open_approval(
+                        subject=f"Interview spec sans réponse depuis 24h (tour {round_no})",
+                        payload=(f"Aucune réponse reçue sur la question en attente.\n"
+                                 f"Transcript : python scripts/status.py {execution_id}\n"
+                                 f"Répondre à l'agent : python scripts/talk.py {execution_id} \"...\"\n"
+                                 f"Arrêter : python scripts/approve.py {execution_id} reject"),
+                        execution_id=execution_id,
+                    )
                     return {"status": "timeout_spec_interview",
                             "conversation": self.conversation}
                 if self.verdict == "reject":
