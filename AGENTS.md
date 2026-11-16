@@ -8,7 +8,7 @@ lors de la conception du projet — respecte-les sans les rediscuter.
 
 Pipeline multi-agents autonome de développement, exécuté sur **Mistral
 Workflows** (orchestration durable Temporal) :
-**spec (OpenSpec) → gate humaine → plan → dev parallèle (git worktrees) →
+**spec (interview développeur + SPEC.md) → gate humaine → plan → dev parallèle (git worktrees) →
 boucle tests bornée → fusions séquentielles → gate humaine finale → merge**.
 
 ## Stack et dépendances
@@ -19,9 +19,9 @@ boucle tests bornée → fusions séquentielles → gate humaine finale → merg
   les durable agents (`Agent`/`Runner` du plugin) : dépréciés.
 - Routing modèles : `mistral-large-latest` pour le raisonnement
   (spec/planner/reviewer), `mistral-medium-latest` pour les boucles dev/tests.
-- Repo cible : **OpenSpec** initialisé (`openspec init`). La spec n'est jamais
-  du texte libre : toujours un change folder conforme
-  `openspec/changes/<id>/{proposal.md, design.md, tasks.md, specs/}`.
+- Repo cible quelconque. La spec est un fichier `SPEC.md` à la racine du repo
+  cible : l'agent spec l'écrit après avoir interviewé le développeur
+  (QUESTION:/reply), et le développeur la valide à la gate.
 
 ## Règles d'architecture (non négociables)
 
@@ -33,7 +33,7 @@ boucle tests bornée → fusions séquentielles → gate humaine finale → merg
    re-jouée après CHAQUE fusion. Conflit → abort + escalade.
 4. **Boucles bornées** : `MAX_DEV_ITERATIONS = 5` (dev→tests), `MAX_AGENT_TURNS
    = 20` (boucle d'outils). Au-delà : escalade humaine, jamais de boucle infinie.
-5. **Gates humaines** : (a) approbation du proposal OpenSpec, (b) review du
+5. **Gates humaines** : (a) approbation de `SPEC.md`, (b) review du
    diff final. Le workflow dort sur un signal (`approve`/`reject`) —
    voir Waiting for Conditions dans la doc Mistral Workflows. **Interview
    interactif** : pendant la phase spec, l'agent pose des questions
@@ -50,10 +50,10 @@ boucle tests bornée → fusions séquentielles → gate humaine finale → merg
 
 - Front Angular : `C:\projets\toollive-c8y` (alias `c8y` dans `scripts/run.py`) —
   tests Jest auto-détectés (`npm run test-unit -- --ci`), lint `npm run lint`,
-  branche de base `develop`, OpenSpec déjà initialisé.
+  branche de base `develop`.
 - Microservice Python : `C:\projets\toollive-c8y-microservice` (alias `micro`) —
   tests `uv run pytest -x -q`, lint `uv run ruff check`, branche de base
-  `develop`, OpenSpec initialisé.
+  `develop`.
 
 Détail et variables d'env : `docs/architecture.md`. La commande de test est
 auto-détectée par repo (`test_runner.py::test_cmd_for`, override
@@ -97,4 +97,3 @@ Déploiement : managé via un miroir GitHub public du repo (pas de clé API dans
 le repo ; les managed deployments ne supportent que GitHub public pour
 l'instant) ou self-hosted (CI GitLab + Helm chart). Voir `docs/architecture.md`.
 Docs : https://docs.mistral.ai/studio/workflows/overview
-OpenSpec : https://openspec.dev/docs/skills

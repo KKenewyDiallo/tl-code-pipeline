@@ -14,7 +14,6 @@ from typing import Any, Callable
 
 import mistralai.workflows as workflows
 
-from worker.activities.openspec_tools import build_spec_tools
 from worker.agents import definitions as defs
 from worker.agents.run_agent import run_agent
 from worker.agents.tools import build_dev_tools
@@ -28,10 +27,9 @@ AGENT_MAX_ATTEMPTS = 3
 
 def _tool_impls(toolkit: str, target: str) -> dict[str, tuple[dict, Callable]]:
     """Reconstruit les tools de l'agent depuis des paramètres sérialisables :
-    `spec` -> tools OpenSpec du repo cible, `dev` -> tools confinés au worktree."""
-    if toolkit == "spec":
-        return build_spec_tools(target)
-    if toolkit == "dev":
+    `spec` et `dev` -> tools shell/fichiers confinés à `target` (repo cible
+    pour la spec, worktree pour le dev)."""
+    if toolkit in ("spec", "dev"):
         return build_dev_tools(target)
     raise ValueError(f"toolkit inconnu: {toolkit!r} (attendu: 'spec' ou 'dev')")
 
