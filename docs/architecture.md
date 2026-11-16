@@ -171,7 +171,7 @@ def get_state(self) -> dict:
 Pendant la phase `spec`, l'agent peut terminer sa réponse par une ligne
 `QUESTION: ...` : le pipeline notifie le webhook, dort jusqu'au signal `reply`
 (ou `approve` pour forcer la finalisation, `reject` pour avorter), puis relance
-l'agent avec le transcript complet. Boucle bornée à `MAX_SPEC_ROUNDS = 6`.
+l'agent avec le transcript complet. Pas de limite de tours (attente 24 h par question ; escalade après `MAX_EMPTY_SPEC_ROUNDS = 3` tours sans progression).
 Quand `SPEC.md` est prêt, l'agent termine par `CHANGE_ID: <id>`.
 
 - Notification : `test_runner.open_approval` poste sur le webhook
