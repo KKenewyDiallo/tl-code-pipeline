@@ -1,18 +1,18 @@
 # code-pipeline — Pipeline multi-agents Mistral Workflows (spec → dev → tests)
 
-Pipeline autonome de développement : un agent de spec (basé sur les skills
-[OpenSpec](https://openspec.dev/)) interviewe l'humain et produit un change
-proposal, un agent planner décompose en tâches, des agents dev implémentent en
+Pipeline autonome de développement : un agent de spec interviewe le
+développeur (questions/réponses) pour valider le changement et produit une
+spec `SPEC.md`, un agent planner décompose en tâches, des agents dev implémentent en
 parallèle dans des git worktrees isolés, un agent tester fait tourner la boucle
 dev→tests, et chaque étape sensible passe par une gate humaine (signal durable).
 
 ## Architecture
 
 ```
-Humain ──► agent Spec (OpenSpec) ──► GATE: approbation du proposal
+Humain ─► agent Spec (interview + SPEC.md) ─► GATE: approbation de la spec
               │
               ▼
-        agent Planner (parse tasks.md)
+        agent Planner (parse SPEC.md)
               │
               ▼ (parallèle, 1 worktree par tâche)
         agents Dev ──► activity run_tests ──┐
@@ -37,21 +37,17 @@ Humain ──► agent Spec (OpenSpec) ──► GATE: approbation du proposal
 # 2. Installer les dépendances du worker
 uv add 'mistralai-workflows[mistralai]'
 
-# 3. Initialiser OpenSpec dans le repo CIBLE (celui que le pipeline modifie)
-cd /chemin/vers/ton-repo
-openspec init          # installe AGENTS.md + skills openspec-* (propose, apply, verify...)
-
-# 4. Lancer le worker
+# 3. Lancer le worker
 mistral dev
 
-# 5. Lancer une exécution
+# 4. Lancer une exécution
 python scripts/run.py "Ajouter ..." --repo c8y     # front Angular toollive-c8y
 python scripts/run.py "Ajouter ..." --repo micro   # microservice Python
 # mode cloud (repos cibles sur GitLab) :
 #   export gitlab_c8y_repo=https://gitlab.com/<org>/toollive-c8y.git
 #   python scripts/run.py "Ajouter ..." --repo c8y
 
-# 6. Interagir avec le workflow en cours (notification webhook avec l'execution_id) :
+# 5. Interagir avec le workflow en cours (notification webhook avec l'execution_id) :
 python scripts/status.py <execution_id>                       # état + transcript de l'agent
 python scripts/talk.py <execution_id> "oui, mais sans migration"  # répondre à l'agent spec
 python scripts/approve.py <execution_id> approve               # valider une gate (ou reject)
@@ -67,10 +63,10 @@ ou self-hosted (CI GitLab + Helm chart) — voir `docs/architecture.md`.
 Deux repos sont configurés (détail dans `docs/architecture.md`) :
 
 - **Front Angular** `C:\projets\toollive-c8y` (alias `c8y`) — Angular 18 +
-  Cumulocity, OpenSpec déjà initialisé, tests Jest auto-détectés
+  Cumulocity, tests Jest auto-détectés
   (`npm run test-unit -- --ci`), lint `npm run lint`, branche de base `develop`.
 - **Microservice Python** `C:\projets\toollive-c8y-microservice` (alias `micro`) —
-  Python 3.14 + Flask + uv, OpenSpec initialisé, tests `uv run pytest -x -q`,
+  Python 3.14 + Flask + uv, tests `uv run pytest -x -q`,
   lint `uv run ruff check`, branche de base `develop`.
 
 La commande de test est auto-détectée selon le repo (override :
@@ -103,7 +99,6 @@ apps/worker/src/worker/
     ├── definitions.py           # spec/planner/dev/tester (Agents SDK)
     └── run_agent.py             # boucle Runner + tools
 
-openspec/                       # exemple de la structure attendue dans le repo cible
 docs/architecture.md
 scripts/run.py
 ```
@@ -112,4 +107,3 @@ scripts/run.py
 
 - Mistral Workflows : https://docs.mistral.ai/studio/workflows/overview
 - Agents SDK : https://docs.mistral.ai/studio/agents/overview
-- OpenSpec skills : https://openspec.dev/docs/skills

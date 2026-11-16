@@ -39,10 +39,8 @@ RUN set -eux; \
       | tar -xJ -C /usr/local --strip-components=1; \
     node --version; npm --version
 
-# CLI OpenSpec (l'agent spec exécute `openspec list/validate/...`) + uv
-# (microservice Python : uv sync / uv run pytest / uv run ruff)
-RUN npm install -g @fission-ai/openspec@1.13.0 \
- && pip install --no-cache-dir uv
+# uv (microservice Python : uv sync / uv run pytest / uv run ruff)
+RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 

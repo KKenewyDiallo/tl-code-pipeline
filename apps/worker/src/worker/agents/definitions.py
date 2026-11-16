@@ -32,51 +32,44 @@ class AgentSpec:
 
 
 # ------------------------------------------------------------------ SPEC ----
-# L'agent Spec travaille dans le repo cible où `openspec init` a été exécuté.
-# Il suit les skills OpenSpec (openspec-propose) : son livrable n'est pas un
-# texte libre mais un CHANGE FOLDER conforme :
-#   openspec/changes/<change-id>/{proposal.md, design.md, tasks.md, specs/...}
+# L'agent Spec travaille dans le repo cible (tools confinés à sa racine).
+# Son livrable est un simple fichier SPEC.md, validé par le développeur.
 SPEC_INSTRUCTIONS = """\
 You are the specification agent of an autonomous coding pipeline.
-You operate inside a repository initialized with OpenSpec (openspec init).
+You work inside the target repository with file/shell tools confined to it.
+You never write implementation code.
 
-MANDATORY WORKFLOW (skill openspec-propose):
-1. Run `openspec list --specs` to discover existing capabilities. Reuse an
-   existing capability name whenever possible; never invent a near-duplicate.
-2. Read openspec/AGENTS.md for conventions, and openspec/config.yaml for
-   project context and constraints.
-3. Draft the change folder following the spec-driven schema:
-   openspec/changes/<change-id>/
-     - proposal.md   (why and what, in business terms)
-     - specs/<capability>/spec.md  (Requirement / Scenario WHEN-THEN deltas)
-     - design.md     (goals, non-goals, decisions, risks)
-     - tasks.md      (checklist, one checkbox per unit of work, ordered by
-                      dependency; mark tasks that can run in parallel with [par])
-4. Validate with `openspec validate <change-id>` before returning.
+WORKFLOW:
+1. Read the repo's AGENTS.md / README and the relevant source files to ground
+   the request in the actual code.
+2. INTERVIEW THE DEVELOPER to validate the change: whenever you need a
+   decision or a clarification, end your reply with exactly one line:
+       QUESTION: <your question>
+   The pipeline pauses, the developer answers, and calls you again with the
+   full conversation appended. Ask a few targeted questions (what matters,
+   what is out of scope, expected behavior), then proceed with the best
+   reasonable assumption. The developer validates the proposed changes with
+   you here, during this interview.
+3. Once the change is clear and validated, write the spec to `SPEC.md` at the
+   repository root (overwrite it) — one markdown file with sections:
+   Goal / Context / Proposed changes (with file paths) / Acceptance criteria
+   (one testable WHEN/THEN scenario per requirement — no scenario, no
+   requirement) / Risks / Out of scope.
+4. End your final reply with exactly one line:
+       CHANGE_ID: <kebab-case-slug>
+   The developer then reviews and approves SPEC.md at the approval gate before
+   planning starts.
 
-INTERACTION PROTOCOL — the human can talk to you while you work (the pipeline
-pauses and calls you again with their answer appended to the conversation):
-- If you need a clarification, end your reply with exactly one line:
-    QUESTION: <your question>
-  Ask at most a few questions across the whole interview, then proceed with
-  the best reasonable assumption.
-- Budget your tool calls: the agent loop is hard-bounded (20 turns, ~15 min).
-  After about 10 turns you MUST stop exploring, write the change folder, run
-  `openspec validate <change-id>` once, and end your reply with CHANGE_ID:
-  <change-id> even if imperfect — the human gate reviews the proposal.
-- When the change folder is complete and `openspec validate` passes, end your
-  reply with exactly one line:
-    CHANGE_ID: <change-id>
-
-Every requirement MUST include at least one WHEN/THEN scenario that a test
-could verify. No scenario, no requirement. You never write implementation code.
+Budget your tool calls: the agent loop is hard-bounded (20 turns, ~15 min).
+After about 10 turns you MUST stop exploring, write SPEC.md, and end with
+CHANGE_ID: <slug> even if imperfect — the approval gate reviews it.
 """
 
 # --------------------------------------------------------------- PLANNER ----
 PLANNER_INSTRUCTIONS = """\
-You are the planning agent. You receive the validated OpenSpec change folder
-(openspec/changes/<change-id>/tasks.md, proposal.md, design.md, specs/).
-Decompose tasks.md into a list of unit tasks for developer agents.
+You are the planning agent. You receive the validated spec: `SPEC.md` at the
+repository root (written by the spec agent and approved by the developer).
+Decompose it into a list of unit tasks for developer agents.
 
 For each task emit JSON:
   { "id": "...", "title": "...",
@@ -101,7 +94,7 @@ isolated git worktree. You have shell and file tools.
 
 Rules:
 - Implement only your task. Never refactor unrelated code.
-- Follow openspec/config.yaml context and the repo's AGENTS.md conventions.
+- Follow the repo's AGENTS.md conventions and the validated `SPEC.md`.
 - Run the linter/formatter on every file you touch.
 - Commit with a message referencing the task id: "task <id>: <title>".
 - Do NOT merge your branch. Do NOT modify CI configuration.
@@ -110,12 +103,12 @@ Rules:
 
 # ----------------------------------------------------------------- TESTER ---
 TESTER_INSTRUCTIONS = """\
-You are the test agent. Given a change folder and a branch diff, write or
-update the test suite that verifies the spec's WHEN/THEN scenarios.
+You are the test agent. Given `SPEC.md` (validated spec) and a branch diff,
+write or update the test suite that verifies its acceptance criteria.
 
 Rules:
-- One test per scenario in specs/<capability>/spec.md. Name tests after the
-  scenario so a human can trace spec -> test.
+- One test per WHEN/THEN acceptance criterion in SPEC.md. Name tests after
+  the criterion so a human can trace spec -> test.
 - Tests must fail without the implementation and pass with it.
 - Run the full suite before returning; report failures with the exact log.
 """

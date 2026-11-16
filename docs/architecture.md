@@ -2,16 +2,16 @@
 
 Pipeline multi-agents autonome de développement, exécuté sur **Mistral
 Workflows** (orchestration durable, Temporal sous le capot) :
-**spec (OpenSpec) → gate humaine → plan → dev parallèle (git worktrees) →
+**spec (interview développeur + SPEC.md) → gate humaine → plan → dev parallèle (git worktrees) →
 boucle tests bornée → fusions séquentielles → gate humaine finale → merge**.
 
 ## Vue d'ensemble
 
 ```
-Humain ──► agent Spec (OpenSpec) ──► GATE 1 : approbation du proposal (signal)
+Humain ─► agent Spec (SPEC.md) ─► GATE 1 : approbation de SPEC.md (signal)
               │
               ▼
-        agent Planner (parse tasks.md → JSON de tâches + dépendances)
+        agent Planner (parse SPEC.md → JSON de tâches + dépendances)
               │
               ▼ (parallèle, 1 worktree par tâche indépendante)
         agents Dev ⇄ agent Tester ──► activity run_tests   (boucle bornée)
@@ -20,7 +20,7 @@ Humain ──► agent Spec (OpenSpec) ──► GATE 1 : approbation du proposa
         fusions séquentielles dans la branche de base + re-run complet des tests
               │
               ▼
-        GATE 2 : review du diff cumulé (signal) ──► merge final / archive
+        GATE 2 : review du diff cumulé (signal) ──► merge final
 ```
 
 ## Composants
@@ -32,14 +32,12 @@ apps/worker/src/worker/
 ├── activities/
 │   ├── git_tools.py             # worktree add/remove, commit, merge séquentiel, diff
 │   ├── test_runner.py           # run_tests (quality gate) + gates humaines (approval)
-│   └── openspec_tools.py        # CLI openspec exposé comme tools (list/read/write/validate)
 └── agents/
     ├── definitions.py           # spec / planner / dev / tester / reviewer + bornes
     ├── run_agent.py             # boucle modèle → tools, bornée à MAX_AGENT_TURNS
     └── tools.py                 # shell/fichiers confinés au worktree (safe_path)
 
 scripts/run.py                   # déclenche une exécution (--repo c8y|micro|<chemin>)
-openspec/config.yaml             # contexte du pipeline (les repos cibles ont le leur)
 docs/architecture.md             # ce document
 ```
 
@@ -47,8 +45,8 @@ docs/architecture.md             # ce document
 
 | Agent    | Rôle                                             | Modèle                  |
 |----------|--------------------------------------------------|-------------------------|
-| spec     | produit le change folder OpenSpec (jamais de code)| `mistral-large-latest`  |
-| planner  | tasks.md → tâches JSON avec dépendances          | `mistral-large-latest`  |
+| spec     | interviewe le développeur, produit SPEC.md (jamais de code) | `mistral-large-latest`  |
+| planner  | SPEC.md → tâches JSON avec dépendances         | `mistral-large-latest`  |
 | dev      | implémente UNE tâche dans SON worktree           | `mistral-medium-latest` |
 | tester   | écrit/met à jour les tests des scénarios WHEN/THEN| `mistral-medium-latest` |
 | reviewer | verdict JSON sur le diff cumulé (gate finale)    | `mistral-large-latest`  |
@@ -62,9 +60,9 @@ bornée à `MAX_AGENT_TURNS = 20` tours d'outils).
 `run(repo, request)` — `repo` = chemin du repo cible, `request` = demande en
 langage naturel.
 
-1. **Spec** — l'agent spec travaille dans le repo cible (`openspec init` requis)
-   et produit `openspec/changes/<id>/{proposal.md, design.md, tasks.md, specs/}`.
-   Chaque requirement a au moins un scénario WHEN/THEN testable.
+1. **Spec** — l'agent spec interviewe le développeur (ligne `QUESTION:`, signal
+   `reply`) pour valider le changement, puis écrit `SPEC.md` à la racine du
+   repo cible. Chaque critère d'acceptation a un scénario WHEN/THEN testable.
 2. **GATE 1** — `open_approval` notifie l'humain, `wait_for_approval` dort sur
    le signal `approve`/`reject` (durable, aucun worker actif pendant l'attente).
 3. **Planner** — décompose en tâches `{id, title, capability, files_hint,
@@ -103,14 +101,14 @@ Détection dans `activities/test_runner.py::test_cmd_for` :
 `pyproject.toml` à la racine → pytest/uv ; `package.json` → Jest/npm ;
 sinon fallback `TEST_CMD`. Override : variable d'env `pipeline_test_cmd`.
 
-Chaque repo cible a sa propre `openspec/config.yaml` avec le `context` de sa
-stack (contraintes que l'agent ne peut pas deviner depuis le code) :
+Les conventions de chaque repo cible sont dans son propre `AGENTS.md` (stack,
+contraintes que l'agent ne peut pas deviner depuis le code) — l'agent spec le
+lit en premier :
 
-- `toollive-c8y/openspec/config.yaml` — Angular/Cumulocity, modules métier,
-  conventions (TOOLLIVE-C8Y.md, docs/COMMENT_DOCUMENTER.md), E2E codeceptjs
-  hors scope des boucles dev.
-- `toollive-c8y-microservice/openspec/config.yaml` — Flask/uv, secrets via
-  `./secrets` (jamais en dur), pas de modif CI dans un change.
+- `toollive-c8y/AGENTS.md` — Angular/Cumulocity, modules métier, conventions
+  (TOOLLIVE-C8Y.md, docs/COMMENT_DOCUMENTER.md), E2E codeceptjs hors scope.
+- `toollive-c8y-microservice/AGENTS.md` — Flask/uv, secrets via `./secrets`
+  (jamais en dur), pas de modif CI.
 
 **Worktrees** : `../worktrees/<nom-du-repo>/<task_id>` à côté du repo cible
 (chemin absolu retourné par `create_worktree`), pour éviter les collisions entre
@@ -174,7 +172,7 @@ Pendant la phase `spec`, l'agent peut terminer sa réponse par une ligne
 `QUESTION: ...` : le pipeline notifie le webhook, dort jusqu'au signal `reply`
 (ou `approve` pour forcer la finalisation, `reject` pour avorter), puis relance
 l'agent avec le transcript complet. Boucle bornée à `MAX_SPEC_ROUNDS = 6`.
-Quand le change folder est prêt, l'agent termine par `CHANGE_ID: <id>`.
+Quand `SPEC.md` est prêt, l'agent termine par `CHANGE_ID: <id>`.
 
 - Notification : `test_runner.open_approval` poste sur le webhook
   `approval_webhook_url` (Slack...) avec l'`execution_id` et la commande à taper.
@@ -199,8 +197,7 @@ Deux modes (doc : *Managed deployments* / *Self-hosted*) :
 Dans les deux modes : `deploy/docker/Dockerfile.worker` build l'image du
 worker (`python -m worker.entrypoints.worker`). L'image embarque tout
 l'outillage des activités : **git**, certificats CA, **Node.js 20 + npm**
-(suite Jest du front), **uv** (microservice Python) et le **CLI OpenSpec**
-(`@fission-ai/openspec`, pour l'agent spec). `run_tests` appelle d'abord
+(suite Jest du front) et **uv** (microservice Python). `run_tests` appelle d'abord
 `ensure_deps` : `npm ci` (fallback `npm install`) si `node_modules` manque,
 `uv sync` si `.venv` manque — un clone frais est directement testable.
 `DEPLOYMENT_NAME` sert au
@@ -276,5 +273,4 @@ python scripts/run.py "Ajouter ..." --repo c8y   # terminal 2 : lance une exécu
 
 Références : Mistral Workflows
 (https://docs.mistral.ai/studio/workflows/overview), Agents SDK
-(https://docs.mistral.ai/studio/agents/overview), OpenSpec
-(https://openspec.dev/docs/skills).
+(https://docs.mistral.ai/studio/agents/overview).

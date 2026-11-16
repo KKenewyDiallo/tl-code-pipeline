@@ -1,6 +1,6 @@
-"""Orchestrateur durable : spec (OpenSpec) → gate humaine → plan → dev
-parallèle (worktrees) → boucle tests bornée → fusions séquentielles →
-gate humaine finale (Merge Request) → merge → archive OpenSpec.
+"""Orchestrateur durable : spec (interview développeur + SPEC.md) → gate
+humaine → plan → dev parallèle (worktrees) → boucle tests bornée → fusions
+séquentielles → gate humaine finale (Merge Request) → merge.
 
 Entrées :
     repo     : URL du repo cible (https://gitlab.com/<org>/<repo>.git — cloné
@@ -24,7 +24,6 @@ from worker.agents.definitions import MAX_DEV_ITERATIONS, MAX_SPEC_ROUNDS
 
 with wf.unsafe.imports_passed_through():
     from worker.activities import agent_runner, git_tools, test_runner
-    from worker.activities.openspec_tools import archive_change
 
 GATE_TIMEOUT = timedelta(hours=24)
 
@@ -63,7 +62,7 @@ def _extract_json(text: str):
 @workflows.workflow.define(
     name="spec-to-tests",
     workflow_display_name="Spec → Dev → Tests",
-    workflow_description="Pipeline multi-agents: agent spec OpenSpec (interview "
+    workflow_description="Pipeline multi-agents: agent spec (interview développeur + SPEC.md, "
                           "interactif: signaux approve/reject/reply + query state), "
                           "dev parallèle en worktrees, boucle tests bornée, "
                           "fusions, Merge Request.",
@@ -125,9 +124,10 @@ class SpecToTests:
 
         # ------------------------------------------------------------------
         # 1. AGENT SPEC — interview interactif borné (MAX_SPEC_ROUNDS) :
-        #    l'agent pose des questions (ligne "QUESTION: ..."), le workflow
-        #    dort sur le signal `reply` (scripts/talk.py) et relance l'agent
-        #    avec la réponse. Verdict final : ligne "CHANGE_ID: <id>".
+        #    l'agent pose des questions (ligne "QUESTION: ...") pour valider le
+        #    changement avec le développeur, le workflow dort sur le signal
+        #    `reply` (scripts/talk.py) et relance l'agent avec la réponse.
+        #    L'agent écrit SPEC.md puis termine par "CHANGE_ID: <id>".
         #    Le transcript est interrogeable à tout moment (query `state`).
         self.phase = "spec"
         self.conversation.append({"role": "human", "text": request})
@@ -197,7 +197,7 @@ class SpecToTests:
         self.phase = "gate_spec"
         await test_runner.open_approval(
             subject=f"Spec à valider: {change_id}",
-            payload=f"{repo}/openspec/changes/{change_id}/proposal.md — réponds "
+            payload=f"Spec à valider : {repo}/SPEC.md — réponds "
                     f"`approve` ou `reject` (python scripts/approve.py {execution_id} "
                     f"approve|reject) ; transcript : python scripts/status.py {execution_id}",
             execution_id=execution_id,
@@ -208,7 +208,7 @@ class SpecToTests:
         # ------------------------------------------------------------------
         # 3. AGENT PLANNER — tasks.md -> tâches unitaires avec dépendances
         self.phase = "plan"
-        plan_prompt = (f"Change folder: openspec/changes/{change_id}/ — retourne UNIQUEMENT "
+        plan_prompt = (f"Lis SPEC.md à la racine du repo (change_id: {change_id}) — retourne UNIQUEMENT "
                        f"le JSON {{\"tasks\": [{{id, title, capability, files_hint, depends_on, acceptance}}]}}")
         plan = ""
         tasks = None
@@ -300,9 +300,7 @@ class SpecToTests:
         elif repo_url:
             await git_tools.push_branch(repo, base)
 
-        # 8. ARCHIVE OpenSpec — specs/ à jour, change archivé
         self.phase = "done"
-        await archive_change(repo, change_id)
         return {"status": "merged", "change_id": change_id,
                 "mr": (mr.get("mr") or {}).get("web_url"), "tests": final}
 
@@ -311,8 +309,8 @@ class SpecToTests:
         """Boucle bornée dev -> tests (escalade humaine au bout de N tours)."""
         wt = await git_tools.create_worktree(repo, task["id"])
 
-        context = (f"Change: openspec/changes/{change_id}/ (lis tasks.md, design.md, "
-                   f"specs/). Ta tâche: {json.dumps(task)}")
+        context = (f"Spec validée : SPEC.md à la racine du repo (change_id: {change_id}). "
+                   f"Ta tâche: {json.dumps(task)}")
 
         for iteration in range(MAX_DEV_ITERATIONS):
             await agent_runner.run_agent_activity("dev", context, "dev", wt["worktree"])
