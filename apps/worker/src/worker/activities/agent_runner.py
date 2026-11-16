@@ -19,8 +19,11 @@ from worker.agents import definitions as defs
 from worker.agents.run_agent import run_agent
 from worker.agents.tools import build_dev_tools
 
-# Une boucle d'agent peut durer longtemps (MAX_AGENT_TURNS appels modèle + tools).
-AGENT_TIMEOUT = timedelta(minutes=60)
+# start_to_close doit rester très inférieur au timeout d'exécution de la
+# plateforme (1h) : une activité bloquée échoue alors explicitement au lieu de
+# tuer le workflow en TIMED_OUT. Retries bornés (3 tentatives max).
+AGENT_TIMEOUT = timedelta(minutes=20)
+AGENT_MAX_ATTEMPTS = 3
 
 
 def _tool_impls(toolkit: str, target: str) -> dict[str, tuple[dict, Callable]]:
@@ -33,7 +36,11 @@ def _tool_impls(toolkit: str, target: str) -> dict[str, tuple[dict, Callable]]:
     raise ValueError(f"toolkit inconnu: {toolkit!r} (attendu: 'spec' ou 'dev')")
 
 
-@workflows.activity(start_to_close_timeout=AGENT_TIMEOUT)
+@workflows.activity(
+    start_to_close_timeout=AGENT_TIMEOUT,
+    retry_policy_max_attempts=AGENT_MAX_ATTEMPTS,
+    retry_policy_backoff_coefficient=2.0,
+)
 async def run_agent_activity(
     agent_name: str, user_message: str, toolkit: str, target: str
 ) -> str:
