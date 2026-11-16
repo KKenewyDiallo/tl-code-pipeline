@@ -308,11 +308,15 @@ name = "code-pipeline-worker"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "httpx2" },
     { name = "mistralai-workflows", extra = ["mistralai"] },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "mistralai-workflows", extras = ["mistralai"] }]
+requires-dist = [
+    { name = "httpx2", specifier = "<2.16.1" },
+    { name = "mistralai-workflows", extras = ["mistralai"] },
+]
 
 [[package]]
 name = "colorama"
