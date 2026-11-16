@@ -138,6 +138,7 @@ class SpecToTests:
                 raise RuntimeError(
                     f"interview spec non convergé après {MAX_SPEC_ROUNDS} "
                     f"tours — escalade humaine (query `state`, signal `reject`)")
+            round_no += 1
             out = await agent_runner.run_agent_activity(
                 "spec", self._transcript(), "spec", repo)
             question = _prefixed_line(out, "QUESTION:")
@@ -170,7 +171,6 @@ class SpecToTests:
                         "role": "human",
                         "text": "[Finalise la spec maintenant, ne pose plus de question.]",
                     })
-                round_no += 1
                 continue
             change_id = (cid or out.strip()).strip()
         self.pending_question = None
