@@ -9,11 +9,17 @@ Squelette volontairement explicite (sans le plugin durable déprécié) :
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Callable
 
 from mistralai.client import Mistral
 
-from worker.agents.definitions import AgentSpec, MAX_AGENT_TURNS
+from worker.agents.definitions import (
+    AgentSpec,
+    MAX_AGENT_SECONDS,
+    MAX_AGENT_TURNS,
+    MAX_REPEATED_TOOL_CALLS,
+)
 
 
 def _content_text(content: Any) -> str:
@@ -43,7 +49,12 @@ async def run_agent(agent: AgentSpec, user_message: str, tool_impls: dict[str, C
     ] if tool_impls else None
 
     last_answer = ""
+    deadline = time.monotonic() + MAX_AGENT_SECONDS
+    call_counts: dict[tuple[str, str], int] = {}
+    stop = False
     for _ in range(MAX_AGENT_TURNS):
+        if stop or time.monotonic() > deadline:
+            break
         response = client.chat.complete(
             model=agent.model,
             messages=messages,
@@ -60,11 +71,19 @@ async def run_agent(agent: AgentSpec, user_message: str, tool_impls: dict[str, C
 
         for call in choice.message.tool_calls:
             fn = call.function
-            impl = tool_impls[fn.name][1]
-            try:
-                result = await impl(**json.loads(fn.arguments or "{}"))
-            except Exception as exc:  # l'agent voit l'erreur et corrige
-                result = {"error": str(exc)}
+            key = (fn.name, fn.arguments or "{}")
+            call_counts[key] = call_counts.get(key, 0) + 1
+            if call_counts[key] >= MAX_REPEATED_TOOL_CALLS:
+                stop = True
+                break
+            entry = tool_impls.get(fn.name)
+            if entry is None:
+                result = {"error": f"unknown tool {fn.name!r}; available: {sorted(tool_impls)}"}
+            else:
+                try:
+                    result = await entry[1](**json.loads(fn.arguments or "{}"))
+                except Exception as exc:  # l'agent voit l'erreur et corrige
+                    result = {"error": str(exc)}
             messages.append({
                 "role": "tool",
                 "tool_call_id": call.id,

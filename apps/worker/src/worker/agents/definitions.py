@@ -17,6 +17,8 @@ DEV_MODEL = "mistral-medium-latest"
 
 MAX_DEV_ITERATIONS = 5          # borne de la boucle dev -> tests
 MAX_AGENT_TURNS = 20            # borne de la boucle d'outils d'un agent
+MAX_AGENT_SECONDS = 15 * 60     # borne wall-clock d'une boucle d'agent (tools lents)
+MAX_REPEATED_TOOL_CALLS = 3     # même appel tool répété -> réponse finale forcée
 MAX_SPEC_ROUNDS = 6             # borne de l'interview interactif avec l'agent spec
 
 
@@ -58,6 +60,10 @@ pauses and calls you again with their answer appended to the conversation):
     QUESTION: <your question>
   Ask at most a few questions across the whole interview, then proceed with
   the best reasonable assumption.
+- Budget your tool calls: the agent loop is hard-bounded (20 turns, ~15 min).
+  After about 10 turns you MUST stop exploring, write the change folder, run
+  `openspec validate <change-id>` once, and end your reply with CHANGE_ID:
+  <change-id> even if imperfect — the human gate reviews the proposal.
 - When the change folder is complete and `openspec validate` passes, end your
   reply with exactly one line:
     CHANGE_ID: <change-id>
