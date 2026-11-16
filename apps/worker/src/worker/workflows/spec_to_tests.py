@@ -22,8 +22,8 @@ from mistralai.workflows import workflow as wf
 
 from worker.agents.definitions import (
     MAX_DEV_ITERATIONS,
+    MAX_EMPTY_SPEC_ROUNDS,
     MAX_PLANNER_ATTEMPTS,
-    MAX_SPEC_ROUNDS,
 )
 
 with wf.unsafe.imports_passed_through():
@@ -127,39 +127,47 @@ class SpecToTests:
         execution_id = workflows.get_execution_id()
 
         # ------------------------------------------------------------------
-        # 1. AGENT SPEC — interview interactif borné (MAX_SPEC_ROUNDS) :
+        # 1. AGENT SPEC — interview interactif SANS LIMITE DE TOURS :
         #    l'agent pose des questions (ligne "QUESTION: ...") pour valider le
         #    changement avec le développeur, le workflow dort sur le signal
         #    `reply` (scripts/talk.py) et relance l'agent avec la réponse.
         #    L'agent écrit SPEC.md puis termine par "CHANGE_ID: <id>".
         #    Le transcript est interrogeable à tout moment (query `state`).
+        #    Seule garde : MAX_EMPTY_SPEC_ROUNDS tours consécutifs sans aucune
+        #    progression (ni QUESTION ni CHANGE_ID) -> escalade anti boucle vide.
         self.phase = "spec"
         self.conversation.append({"role": "human", "text": request})
         change_id = ""
         round_no = 0
+        empty_rounds = 0
         while not change_id:
-            if round_no >= MAX_SPEC_ROUNDS:
-                await test_runner.open_approval(
-                    subject=f"Interview spec non convergé après {MAX_SPEC_ROUNDS} tours",
-                    payload=(f"L'agent spec n'a ni posé de question ni renvoyé de CHANGE_ID "
-                             f"en {MAX_SPEC_ROUNDS} tours — le workflow va échouer (escalade).\n"
-                             f"Transcript : python scripts/status.py {execution_id}\n"
-                             f"Arrêter proprement : python scripts/approve.py {execution_id} reject"),
-                    execution_id=execution_id,
-                )
-                raise RuntimeError(
-                    f"interview spec non convergé après {MAX_SPEC_ROUNDS} "
-                    f"tours — escalade humaine (query `state`, signal `reject`)")
             round_no += 1
             out = await agent_runner.run_agent_activity(
                 "spec", self._transcript(), "spec", repo)
             question = _prefixed_line(out, "QUESTION:")
             cid = _prefixed_line(out, "CHANGE_ID:")
+            if not question and not cid:
+                empty_rounds += 1
+                if empty_rounds >= MAX_EMPTY_SPEC_ROUNDS:
+                    await test_runner.open_approval(
+                        subject="Interview spec sans progression",
+                        payload=(f"L'agent spec n'a ni posé de question ni renvoyé de CHANGE_ID "
+                                 f"depuis {MAX_EMPTY_SPEC_ROUNDS} tours (réponses vides) — "
+                                 f"le workflow va échouer (escalade).\n"
+                                 f"Transcript : python scripts/status.py {execution_id}\n"
+                                 f"Arrêter proprement : python scripts/approve.py {execution_id} reject"),
+                        execution_id=execution_id,
+                    )
+                    raise RuntimeError(
+                        f"interview spec sans progression depuis {MAX_EMPTY_SPEC_ROUNDS} "
+                        f"tours (réponses vides) — escalade humaine (query `state`, signal `reject`)")
+                continue
+            empty_rounds = 0
             if question and not cid:
                 self.pending_question = question
                 self.conversation.append({"role": "agent", "text": question})
                 await test_runner.open_approval(
-                    subject=f"Question de l'agent spec (tour {round_no + 1})",
+                    subject=f"Question de l'agent spec (tour {round_no})",
                     payload=(f"{question}\n\nRéponds à l'agent : python scripts/talk.py "
                              f"{execution_id} \"ta réponse\"\nForcer la finalisation : "
                              f"python scripts/approve.py {execution_id} approve\n"

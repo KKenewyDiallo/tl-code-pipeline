@@ -19,7 +19,7 @@ MAX_DEV_ITERATIONS = 5          # borne de la boucle dev -> tests
 MAX_AGENT_TURNS = 20            # borne de la boucle d'outils d'un agent
 MAX_AGENT_SECONDS = 15 * 60     # borne wall-clock d'une boucle d'agent (tools lents)
 MAX_REPEATED_TOOL_CALLS = 3     # même appel tool répété -> réponse finale forcée
-MAX_SPEC_ROUNDS = 6             # borne de l'interview interactif avec l'agent spec
+MAX_EMPTY_SPEC_ROUNDS = 3       # tours spec sans QUESTION ni CHANGE_ID -> escalade (pas de boucle vide)
 MAX_PLANNER_ATTEMPTS = 3        # tentatives du planner (prompt strict si réponse vide)
 MAX_API_ATTEMPTS = 3            # retries d'un appel API sur erreur transitoire (429/5xx)
 

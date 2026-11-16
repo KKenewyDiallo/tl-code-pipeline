@@ -38,7 +38,7 @@ boucle tests bornée → fusions séquentielles → gate humaine finale → merg
    voir Waiting for Conditions dans la doc Mistral Workflows. **Interview
    interactif** : pendant la phase spec, l'agent pose des questions
    (signal `reply` via `scripts/talk.py`, transcript lisible via la query
-   `state` / `scripts/status.py`), boucle bornée à `MAX_SPEC_ROUNDS = 6`.
+   `state` / `scripts/status.py`), sans limite de tours (attente 24 h par question ; escalade après `MAX_EMPTY_SPEC_ROUNDS = 3` tours sans progression).
 6. **Interfaces d'abord** : le planner place les types/API partagés dans la
    première tâche ; les tâches parallèles codent contre ce contrat.
 7. **Tools confinés** : les tools shell/fichiers des agents dev sont bornés au
