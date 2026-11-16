@@ -20,7 +20,11 @@ from datetime import timedelta
 import mistralai.workflows as workflows
 from mistralai.workflows import workflow as wf
 
-from worker.agents.definitions import MAX_DEV_ITERATIONS, MAX_SPEC_ROUNDS
+from worker.agents.definitions import (
+    MAX_DEV_ITERATIONS,
+    MAX_PLANNER_ATTEMPTS,
+    MAX_SPEC_ROUNDS,
+)
 
 with wf.unsafe.imports_passed_through():
     from worker.activities import agent_runner, git_tools, test_runner
@@ -188,7 +192,7 @@ class SpecToTests:
                         "text": "[Finalise la spec maintenant, ne pose plus de question.]",
                     })
                 continue
-            change_id = (cid or out.strip()).strip()
+            change_id = cid or ""
         self.pending_question = None
         self.conversation.append({"role": "agent", "text": f"CHANGE_ID: {change_id}"})
 
@@ -212,7 +216,7 @@ class SpecToTests:
                        f"le JSON {{\"tasks\": [{{id, title, capability, files_hint, depends_on, acceptance}}]}}")
         plan = ""
         tasks = None
-        for attempt in range(2):
+        for attempt in range(MAX_PLANNER_ATTEMPTS):
             plan = await agent_runner.run_agent_activity(
                 "planner",
                 plan_prompt if attempt == 0 else (
@@ -231,7 +235,7 @@ class SpecToTests:
                 break
         if not tasks:
             raise RuntimeError(
-                f"planner: aucune tâche après 2 tentatives (dernière réponse: {plan[:300]!r})")
+                f"planner: aucune tâche après {MAX_PLANNER_ATTEMPTS} tentatives (dernière réponse: {plan[:300]!r})")
         by_id = {t["id"]: t for t in tasks}
 
         # ------------------------------------------------------------------

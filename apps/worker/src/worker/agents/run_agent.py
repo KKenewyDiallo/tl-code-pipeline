@@ -8,6 +8,7 @@ Squelette volontairement explicite (sans le plugin durable déprécié) :
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import Any, Callable
@@ -18,8 +19,33 @@ from worker.agents.definitions import (
     AgentSpec,
     MAX_AGENT_SECONDS,
     MAX_AGENT_TURNS,
+    MAX_API_ATTEMPTS,
     MAX_REPEATED_TOOL_CALLS,
 )
+
+
+def _is_transient_api_error(exc: BaseException) -> bool:
+    """Erreur API transitoire (429 / 5xx Cloudflare, timeout, connexion) :
+    on retente l'appel au lieu de tuer l'activité."""
+    status = getattr(getattr(exc, "raw_response", None), "status_code", None)
+    if isinstance(status, int):
+        return status == 429 or status >= 500
+    return isinstance(exc, (asyncio.TimeoutError, ConnectionError))
+
+
+async def _complete_with_retry(client: Mistral, model: str,
+                               messages: list, tools: Any) -> Any:
+    """Appel chat.complete avec retries bornés sur erreur transitoire."""
+    delay = 5.0
+    for attempt in range(MAX_API_ATTEMPTS):
+        try:
+            return client.chat.complete(model=model, messages=messages, tools=tools)
+        except Exception as exc:
+            if attempt == MAX_API_ATTEMPTS - 1 or not _is_transient_api_error(exc):
+                raise
+            await asyncio.sleep(delay)
+            delay *= 3
+    raise AssertionError("unreachable")
 
 
 def _content_text(content: Any) -> str:
@@ -55,11 +81,7 @@ async def run_agent(agent: AgentSpec, user_message: str, tool_impls: dict[str, C
     for _ in range(MAX_AGENT_TURNS):
         if stop or time.monotonic() > deadline:
             break
-        response = client.chat.complete(
-            model=agent.model,
-            messages=messages,
-            tools=tools_schema,
-        )
+        response = await _complete_with_retry(client, agent.model, messages, tools_schema)
         choice = response.choices[0]
         messages.append(choice.message.model_dump())
         text = _content_text(choice.message.content)
@@ -92,14 +114,15 @@ async def run_agent(agent: AgentSpec, user_message: str, tool_impls: dict[str, C
 
     # MAX_AGENT_TURNS atteint : un dernier appel SANS tools force le modèle à
     # répondre en texte avec ce qu'il a déjà lu (la boucle reste bornée).
-    response = client.chat.complete(
-        model=agent.model,
-        messages=messages + [{
+    response = await _complete_with_retry(
+        client,
+        agent.model,
+        messages + [{
             "role": "user",
             "content": ("You have reached the maximum number of tool calls. "
                         "Do not call any tool: answer NOW with your final "
                         "answer only, based on what you have already read."),
         }],
-        tools=None,
+        None,
     )
     return _content_text(response.choices[0].message.content) or last_answer
