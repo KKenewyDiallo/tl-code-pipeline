@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shlex
 import subprocess
 import urllib.error
@@ -62,6 +63,18 @@ def _looks_like_oom(log: str) -> bool:
     return any(marker in low for marker in _OOM_MARKERS)
 
 
+_TOOLCHAIN_MISSING_RE = re.compile(r"(?:^|\n)\s*(?:/bin/)?(?:ba|z)?sh: \d+: [^\n]*not found")
+_TOOLCHAIN_MISSING_MARKERS = ("command not found", "cannot find module")
+
+
+def _toolchain_missing(log: str) -> bool:
+    """Vrai si le log montre que l'outil de test lui-même est absent (ex. « sh: 1:
+    jest: not found » après un npm ci interrompu) — la suite n'a pas pu tourner."""
+    low = (log or "").lower()
+    return bool(_TOOLCHAIN_MISSING_RE.search(low)) or any(
+        m in low for m in _TOOLCHAIN_MISSING_MARKERS)
+
+
 def test_cmd_for(worktree: str) -> list[str]:
     """Commande de test auto-détectée selon la stack du repo cible :
 
@@ -101,15 +114,20 @@ async def _run_logged(cmd: list[str], cwd: str, timeout: int,
             "log": out.decode(errors="replace")}
 
 
-async def ensure_deps(worktree: str) -> dict:
+async def ensure_deps(worktree: str, force: bool = False) -> dict:
     """Installe les dépendances d'un clone frais (le worker clone à vide) :
     - package.json sans node_modules -> `npm ci` (fallback `npm install`)
     - pyproject.toml sans .venv      -> `uv sync`
+    `force=True` réinstalle même si node_modules existe (install précédente
+    interrompue, ex. npm ci tué par l'OOM laissant un node_modules incomplet).
     Helper interne (appelé par run_tests), pas une activité séparée.
     """
     logs = []
+    bin_dir = os.path.join(worktree, "node_modules", ".bin")
+    bin_ok = os.path.isdir(bin_dir) and bool(os.listdir(bin_dir))
     if (os.path.isfile(os.path.join(worktree, "package.json"))
-            and not os.path.isdir(os.path.join(worktree, "node_modules"))):
+            and (force or not os.path.isdir(os.path.join(worktree, "node_modules"))
+                 or not bin_ok)):
         res = await _run_logged(["npm", "ci", "--no-audit", "--no-fund"],
                                 worktree, DEP_TIMEOUT_SECONDS,
                                 extra_env=_node_env(_node_max_old_space()))
@@ -120,7 +138,7 @@ async def ensure_deps(worktree: str) -> dict:
             res = res2 if res2["passed"] else res
         logs.append(res["log"][-2000:])
     if (os.path.isfile(os.path.join(worktree, "pyproject.toml"))
-            and not os.path.isdir(os.path.join(worktree, ".venv"))):
+            and (force or not os.path.isdir(os.path.join(worktree, ".venv")))):
         res = await _run_logged(["uv", "sync"], worktree, DEP_TIMEOUT_SECONDS)
         logs.append(res["log"][-2000:])
     return {"log": "\n".join(logs)}
@@ -138,28 +156,45 @@ async def run_tests(worktree: str) -> dict:
     result = await _run_logged(test_cmd_for(worktree), worktree, TEST_TIMEOUT_SECONDS,
                                extra_env=_node_env(heap))
     result["log"] = (deps["log"] + "\n" + result["log"]) if deps["log"] else result["log"]
-    if result["passed"] or not _looks_like_oom(result["log"]):
+    if not result["passed"] and _toolchain_missing(result["log"]):
+        # node_modules incomplet (ex. npm ci tué par l'OOM d'un run précédent) :
+        # on réinstalle une fois puis on retente la suite
+        deps = await ensure_deps(worktree, force=True)
+        result = await _run_logged(test_cmd_for(worktree), worktree, TEST_TIMEOUT_SECONDS,
+                                   extra_env=_node_env(heap))
+        prefix = (deps["log"] + "\n") if deps["log"] else ""
+        result["log"] = (prefix + "[retry après réinstallation des dépendances]\n"
+                         + result["log"])
+    if result["passed"]:
         return result
-    # Stratégie mémoire (RAM worker non réglable côté déploiement) : un unique
-    # retry en --runInBand (1 worker Jest) avec un tas V8 réduit (<= 1024 Mo).
-    try:
-        retry_heap = str(min(1024, int(heap)))
-    except ValueError:
-        retry_heap = "1024"
-    retry_cmd = [a for a in test_cmd_for(worktree) if not a.startswith("--maxWorkers")]
-    retry_cmd.append("--runInBand")
-    retry = await _run_logged(retry_cmd, worktree, TEST_TIMEOUT_SECONDS,
-                              extra_env=_node_env(retry_heap))
-    retry["log"] = (result["log"]
-                    + f"\n\n[retry --runInBand, NODE_OPTIONS heap={retry_heap}MB]\n"
-                    + retry["log"])
-    retry["retried_in_band"] = True
-    if not retry["passed"] and _looks_like_oom(retry["log"]):
-        retry["unrunnable"] = True
-        retry["log"] += ("\n\n[suite tuée par l'OOM killer du worker même en --runInBand "
-                         "(RAM fixée par la plateforme) : gate NON bloquante, tests à valider "
-                         "via la CI de la MR]")
-    return retry
+    if _looks_like_oom(result["log"]):
+        # Stratégie mémoire (RAM worker non réglable côté déploiement) : un unique
+        # retry en --runInBand (1 worker Jest) avec un tas V8 réduit (<= 1024 Mo).
+        try:
+            retry_heap = str(min(1024, int(heap)))
+        except ValueError:
+            retry_heap = "1024"
+        retry_cmd = [a for a in test_cmd_for(worktree) if not a.startswith("--maxWorkers")]
+        retry_cmd.append("--runInBand")
+        retry = await _run_logged(retry_cmd, worktree, TEST_TIMEOUT_SECONDS,
+                                  extra_env=_node_env(retry_heap))
+        retry["log"] = (result["log"]
+                        + f"\n\n[retry --runInBand, NODE_OPTIONS heap={retry_heap}MB]\n"
+                        + retry["log"])
+        retry["retried_in_band"] = True
+        if not retry["passed"] and (_looks_like_oom(retry["log"])
+                                    or _toolchain_missing(retry["log"])):
+            retry["unrunnable"] = True
+            retry["log"] += ("\n\n[suite non exécutable dans le worker (OOM killer ou outil "
+                             "de test introuvable, RAM fixée par la plateforme) : gate NON "
+                             "bloquante, tests à valider via la CI de la MR]")
+        return retry
+    if _toolchain_missing(result["log"]):
+        result["unrunnable"] = True
+        result["log"] += ("\n\n[outil de test introuvable dans le worker même après "
+                          "réinstallation des dépendances : gate NON bloquante, tests à "
+                          "valider via la CI de la MR]")
+    return result
 
 
 @workflows.activity()
