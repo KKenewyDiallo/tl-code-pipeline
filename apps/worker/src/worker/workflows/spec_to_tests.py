@@ -278,7 +278,7 @@ class SpecToTests:
         for task in tasks:
             await git_tools.merge_branch(repo, f"agent/{task['id']}")
             gate = await test_runner.run_tests(repo)
-            if not gate["passed"]:
+            if not gate["passed"] and not gate.get("unrunnable"):
                 raise RuntimeError(
                     f"regression après fusion {task['id']}: {gate['log'][:500]}")
             await git_tools.cleanup_worktree(repo, worktrees[task["id"]], f"agent/{task['id']}")
@@ -294,10 +294,15 @@ class SpecToTests:
         if repo_url:
             await git_tools.create_branch(repo, release_branch)
             await git_tools.push_branch(repo, release_branch)
+            mr_description = diff["diff"][:4000]
+            if final.get("unrunnable"):
+                mr_description += ("\n\n---\nTests non exécutables dans le worker (OOM killer, "
+                                   "RAM fixée par la plateforme) : gate sautée, à valider via "
+                                   "la CI de cette MR.")
             mr = await git_tools.open_merge_request(
                 repo_url, release_branch, base,
                 title=f"[{change_id}] pipeline spec-to-tests",
-                description=diff["diff"][:4000],
+                description=mr_description,
             )
         review_link = (mr["mr"] or {}).get("web_url") or f"{repo} (diff vs {base})"
         await test_runner.open_approval(
@@ -342,6 +347,8 @@ class SpecToTests:
                     f"task {task['id']}: worktree {wt['worktree']} introuvable — gate de "
                     f"tests inexécutable (worktree supprimé pendant la boucle dev ou worker "
                     f"redémarré) ; escalade humaine")
+            if result.get("unrunnable"):
+                return wt
             context += f"\n\nECHEC TESTS (tour {iteration + 1}):\n{result['log'][:3000]}"
 
         raise RuntimeError(

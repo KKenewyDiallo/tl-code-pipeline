@@ -154,6 +154,11 @@ async def run_tests(worktree: str) -> dict:
                     + f"\n\n[retry --runInBand, NODE_OPTIONS heap={retry_heap}MB]\n"
                     + retry["log"])
     retry["retried_in_band"] = True
+    if not retry["passed"] and _looks_like_oom(retry["log"]):
+        retry["unrunnable"] = True
+        retry["log"] += ("\n\n[suite tuée par l'OOM killer du worker même en --runInBand "
+                         "(RAM fixée par la plateforme) : gate NON bloquante, tests à valider "
+                         "via la CI de la MR]")
     return retry
 
 
