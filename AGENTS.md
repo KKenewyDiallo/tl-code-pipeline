@@ -30,9 +30,10 @@ boucle tests bornée → fusions séquentielles → gate humaine finale → merg
 2. **Isolation** : une tâche dev = un git worktree = une branche `agent/<task_id>`.
    Jamais de commit directement sur main par un agent.
 3. **Fusions séquentielles** : une branche à la fois, suite de tests complète
-   re-jouée après CHAQUE fusion. Conflit → abort + escalade. Si la suite est
-   tuée par l'OOM killer du worker (RAM fixée par la plateforme, même en
-   `--runInBand`), la gate de tests est NON bloquante : on poursuit jusqu'au
+   re-jouée après CHAQUE fusion. Conflit → abort + escalade. Si la suite ne peut
+   pas tourner dans le worker (OOM killer même en `--runInBand`, ou outil de test
+   introuvable genre `jest: not found` après un `npm ci` interrompu — RAM fixée
+   par la plateforme), la gate de tests est NON bloquante : on poursuit jusqu'au
    push de la branche `release/*` + MR, et c'est la CI de la MR qui valide.
 4. **Boucles bornées** : `MAX_DEV_ITERATIONS = 3` (dev→tests), `MAX_AGENT_TURNS
    = 20` (boucle d'outils). Au-delà : escalade humaine, jamais de boucle infinie.
