@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from typing import Any, Callable
 
@@ -22,6 +23,8 @@ from worker.agents.definitions import (
     MAX_API_ATTEMPTS,
     MAX_REPEATED_TOOL_CALLS,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _is_transient_api_error(exc: BaseException) -> bool:
@@ -43,6 +46,8 @@ async def _complete_with_retry(client: Mistral, model: str,
         except Exception as exc:
             if attempt == MAX_API_ATTEMPTS - 1 or not _is_transient_api_error(exc):
                 raise
+            logger.warning("appel API transitoire, retry %d/%d dans %.0fs: %r",
+                           attempt + 1, MAX_API_ATTEMPTS, delay, exc)
             await asyncio.sleep(delay)
             delay *= 3
     raise AssertionError("unreachable")
@@ -50,14 +55,22 @@ async def _complete_with_retry(client: Mistral, model: str,
 
 def _content_text(content: Any) -> str:
     """Contenu d'un message Mistral en texte brut : `str` ou liste de blocs
-    (`thinking`, `text`, ...). Seuls les blocs `text` sont gardés."""
+    (`thinking`, `text`, ...). Les blocs sont des dicts (JSON brut) OU des
+    objets pydantic du SDK (TextChunk...) : on lit type/text en attributs.
+    Seuls les blocs `text` sont gardés."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "\n".join(
-            block.get("text", "") for block in content
-            if isinstance(block, dict) and block.get("type") == "text"
-        )
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                btype, btext = block.get("type"), block.get("text", "")
+            else:
+                btype = getattr(block, "type", None)
+                btext = getattr(block, "text", "")
+            if btype == "text" and btext:
+                parts.append(btext if isinstance(btext, str) else str(btext))
+        return "\n".join(parts)
     return str(content) if content is not None else ""
 
 
@@ -78,7 +91,7 @@ async def run_agent(agent: AgentSpec, user_message: str, tool_impls: dict[str, C
     deadline = time.monotonic() + MAX_AGENT_SECONDS
     call_counts: dict[tuple[str, str], int] = {}
     stop = False
-    for _ in range(MAX_AGENT_TURNS):
+    for turn in range(1, MAX_AGENT_TURNS + 1):
         if stop or time.monotonic() > deadline:
             break
         response = await _complete_with_retry(client, agent.model, messages, tools_schema)
@@ -87,9 +100,18 @@ async def run_agent(agent: AgentSpec, user_message: str, tool_impls: dict[str, C
         text = _content_text(choice.message.content)
         if text:
             last_answer = text
+        logger.info("agent %s tour %d: tool_calls=%d texte=%d chars",
+                    agent.name, turn, len(choice.message.tool_calls or []), len(text))
 
         if not choice.message.tool_calls:
-            return text
+            if text:
+                return text
+            logger.warning("agent %s tour %d: message vide sans tool call -> relance texte",
+                           agent.name, turn)
+            messages.append({"role": "user", "content": (
+                "Your last message had no text and no tool call. "
+                "You MUST answer with text now (a short answer is fine).")})
+            continue
 
         for call in choice.message.tool_calls:
             fn = call.function
@@ -125,4 +147,13 @@ async def run_agent(agent: AgentSpec, user_message: str, tool_impls: dict[str, C
         }],
         None,
     )
-    return _content_text(response.choices[0].message.content) or last_answer
+    final = _content_text(response.choices[0].message.content)
+    if final:
+        logger.info("agent %s: réponse finale forcée, %d chars", agent.name, len(final))
+        return final
+    if last_answer:
+        logger.warning("agent %s: réponse finale forcée vide, fallback dernier texte (%d chars)",
+                       agent.name, len(last_answer))
+        return last_answer
+    logger.warning("agent %s: AUCUN texte produit pendant toute la boucle", agent.name)
+    return f"[agent {agent.name}: aucun texte produit après {MAX_AGENT_TURNS} tours d'outils]"
