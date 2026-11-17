@@ -3,7 +3,7 @@
 Pipeline multi-agents autonome de développement, exécuté sur **Mistral
 Workflows** (orchestration durable, Temporal sous le capot) :
 **spec (interview développeur + SPEC.md) → gate humaine → plan → dev parallèle (git worktrees) →
-boucle tests bornée → fusions séquentielles → gate humaine finale → merge**.
+boucle tests bornée → fusions séquentielles → gate humaine finale → MR ouverte (merge manuel)**.
 
 ## Vue d'ensemble
 
@@ -20,7 +20,7 @@ Humain ─► agent Spec (SPEC.md) ─► GATE 1 : approbation de SPEC.md (signa
         fusions séquentielles dans la branche de base + re-run complet des tests
               │
               ▼
-        GATE 2 : review du diff cumulé (signal) ──► merge final
+        GATE 2 : review du diff cumulé (signal) ──► MR ouverte (merge manuel)
 ```
 
 ## Composants
@@ -78,7 +78,7 @@ langage naturel.
    `npm ci` interrompu — RAM fixée par la plateforme), la gate est non bloquante
    (`unrunnable`, avec une réinstallation forcée des dépendances tentée une fois) :
    on pousse quand même la branche `release/*` + MR, la CI valide les tests.
-6. **GATE 2** — review du diff cumulé, signal `approve`/`reject`, puis merge.
+6. **GATE 2** — review du diff cumulé, signal `approve`/`reject`, puis MR laissée ouverte (merge manuel sur GitLab ; l'auto-merge échouait en HTTP 405).
 
 ## Garanties
 
@@ -137,7 +137,7 @@ d'env `gitlab_c8y_repo` / `gitlab_micro_repo` (URL GitLab des repos cibles).
 Le worker clone alors le repo cible dans `pipeline_workspace` avec
 `gitlab_token` (voir `git_tools.ensure_workspace`), pousse une branche
 `release/<change_id>`, ouvre une **Merge Request GitLab** (la gate de review
-finale = la review de la MR), et merge la MR après le signal `approve`.
+finale = la review de la MR), la MR reste ouverte, merge manuel après le signal `approve`.
 
 **Auth forge — 100% PAT, pas de clé SSH** : pour les opérations git
 (clone/push), les URL SSH (`git@host:...`, `ssh://...`) sont converties en
@@ -249,7 +249,7 @@ en priorité avec fallback sur ce nom — et les autres secrets (`gitlab_token`,
 
 **Les repos cibles (toollive-c8y, toollive-c8y-microservice) restent sur
 GitLab** : le worker les clone via leur URL + `gitlab_token`, pousse les
-branches `agent/*` et `release/<change_id>`, ouvre/merge la MR via l'API
+branches `agent/*` et `release/<change_id>`, ouvre la MR via l'API (merge manuel)
 GitLab. Aucun changement côté repos cibles.
 
 ## Variables d'environnement

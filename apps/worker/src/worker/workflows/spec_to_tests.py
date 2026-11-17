@@ -1,6 +1,6 @@
 """Orchestrateur durable : spec (interview développeur + SPEC.md) → gate
 humaine → plan → dev parallèle (worktrees) → boucle tests bornée → fusions
-séquentielles → gate humaine finale (Merge Request) → merge.
+séquentielles → gate humaine finale → MR ouverte (merge manuel sur le forge).
 
 Entrées :
     repo     : URL du repo cible (https://gitlab.com/<org>/<repo>.git — cloné
@@ -315,16 +315,10 @@ class SpecToTests:
                     "mr": (mr["mr"] or {}).get("web_url")}
 
         # ------------------------------------------------------------------
-        # 7. MERGE — MR GitLab (mode URL) ou push de la branche de base
-        if repo_url and mr.get("mr"):
-            merged = await git_tools.merge_merge_request(repo_url, mr["mr"]["iid"])
-            if "error" in merged:
-                raise RuntimeError(f"merge MR failed: {merged['error']}")
-        elif repo_url:
-            await git_tools.push_branch(repo, base)
-
+        # 7. FIN — pas de merge automatique de la MR (l'auto-merge échouait en
+        # HTTP 405 côté forge) : la MR reste ouverte, merge manuel après review.
         self.phase = "done"
-        return {"status": "merged", "change_id": change_id,
+        return {"status": "mr_opened", "change_id": change_id,
                 "mr": (mr.get("mr") or {}).get("web_url"), "tests": final}
 
     # ---------------------------------------------------------------- boucle
