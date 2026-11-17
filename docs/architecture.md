@@ -137,7 +137,10 @@ d'env `gitlab_c8y_repo` / `gitlab_micro_repo` (URL GitLab des repos cibles).
 Le worker clone alors le repo cible dans `pipeline_workspace` avec
 `gitlab_token` (voir `git_tools.ensure_workspace`), pousse une branche
 `release/<change_id>`, ouvre une **Merge Request GitLab** (la gate de review
-finale = la review de la MR), la MR reste ouverte, merge manuel après le signal `approve`.
+finale = la review de la MR), la MR reste ouverte, merge manuel après le signal `approve`. Pour **compléter
+une MR en cours**, la demande contient « MR <iid> » : le worker fetch la branche
+source de la MR (`checkout_remote_branch`), les worktrees partent de là, et le
+push final pousse sur cette branche (MR mise à jour, jamais supprimée).
 
 **Auth forge — 100% PAT, pas de clé SSH** : pour les opérations git
 (clone/push), les URL SSH (`git@host:...`, `ssh://...`) sont converties en

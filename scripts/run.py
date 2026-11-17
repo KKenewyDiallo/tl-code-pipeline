@@ -5,6 +5,8 @@ Usage :
 
 Exemples :
     python scripts/run.py "Ajouter un icone de recherche dans le tl-input" --repo c8y
+    # Reprendre/compléter une MR en cours (travaille sur sa branche source, la met à jour) :
+    python scripts/run.py "repars de la MR 1585 : applique les retours de code review" --repo c8y
     python scripts/run.py "Exposer le statut OEM dans le microservice" --repo micro
     python scripts/run.py "..." --repo https://gitlab.toollive.bearstech.com/toollive-team/toollive-business/toollive-c8y.git
     # Si le secret gitlab_token n'est pas bindé au déploiement worker, embarquer le PAT dans l'URL :
