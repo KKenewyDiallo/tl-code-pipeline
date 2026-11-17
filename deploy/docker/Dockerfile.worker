@@ -17,6 +17,10 @@
 #                          converties en https://... pour les opérations git.
 #   approval_webhook_url — notification des gates humaines (webhook...)
 #   pipeline_workspace   — dossier de clone des repos cibles (défaut /tmp/...)
+#   pipeline_git_user_name / pipeline_git_user_email — identité des commits
+#                          (défaut : config globale posée ci-dessous, ou
+#                          "code-pipeline <code-pipeline@localhost>" posée en
+#                          local dans chaque clone/worktree par _ensure_identity)
 #
 # Si le GitLab cible utilise une CA privée : copier le certificat ici, ex.
 #   COPY corp-ca.crt /usr/local/share/ca-certificates/corp-ca.crt
@@ -28,6 +32,13 @@ FROM python:3.12-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates curl xz-utils \
  && rm -rf /var/lib/apt/lists/*
+
+# Identité git du worker : sans user.name/user.email, `git commit` échoue
+# ("Committer identity unknown") dans les clones/worktrees -> boucle dev bloquée.
+RUN git config --global init.defaultBranch main \
+ && git config --global user.name "code-pipeline" \
+ && git config --global user.email "code-pipeline@localhost" \
+ && git config --global safe.directory '*'
 
 # Node.js 20 + npm — les tests du front Angular tournent dans le worker
 # (npm run test-unit, Jest). Tarball officiel, arch-aware (amd64/arm64).

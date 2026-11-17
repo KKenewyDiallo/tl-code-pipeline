@@ -31,6 +31,11 @@ with wf.unsafe.imports_passed_through():
 
 GATE_TIMEOUT = timedelta(hours=24)
 
+# Timeout d'exécution déclaré sur le workflow : le SDK mistralai-workflows met
+# 1h par défaut (@workflow.define(execution_timeout=...)) — c'est ce plafond
+# qui tuait l'exécution en TIMED_OUT à 3600004 ms. On le monte à 6h.
+WORKFLOW_EXECUTION_TIMEOUT = timedelta(hours=6)
+
 
 def _prefixed_line(text: str, prefix: str) -> str | None:
     """Extrait le contenu de la première ligne commençant par `prefix`."""
@@ -66,6 +71,7 @@ def _extract_json(text: str):
 @workflows.workflow.define(
     name="spec-to-tests",
     workflow_display_name="Spec → Dev → Tests",
+    execution_timeout=WORKFLOW_EXECUTION_TIMEOUT,
     workflow_description="Pipeline multi-agents: agent spec (interview développeur + SPEC.md, "
                           "interactif: signaux approve/reject/reply + query state), "
                           "dev parallèle en worktrees, boucle tests bornée, "
