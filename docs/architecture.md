@@ -73,7 +73,9 @@ langage naturel.
    sinon escalade humaine (jamais de boucle infinie).
 5. **Fusions séquentielles** — une branche `agent/<task_id>` à la fois, et la
    suite de tests complète est re-jouée après CHAQUE fusion. Conflit → abort +
-   escalade.
+   escalade. Si la suite est tuée par l'OOM killer du worker (RAM fixée par la
+   plateforme, même en `--runInBand`), la gate est non bloquante (`unrunnable`) :
+   on pousse quand même la branche `release/*` + MR, la CI valide les tests.
 6. **GATE 2** — review du diff cumulé, signal `approve`/`reject`, puis merge.
 
 ## Garanties
