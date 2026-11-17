@@ -186,7 +186,8 @@ Quand `SPEC.md` est prêt, l'agent termine par `CHANGE_ID: <id>`.
   (REST : `POST /v1/workflows/executions/{id}/queries`).
 
 Phases exposées par la query `state` : `init → spec → gate_spec → plan → dev
-→ merge → gate_review → done`.
+→ merge → gate_review → (review_fix) → done`. À la gate finale, un `reply` est un
+retour de review traité par le pipeline (correction + re-push, `MAX_REVIEW_ROUNDS` max).
 
 ## Déploiement du worker (cloud)
 

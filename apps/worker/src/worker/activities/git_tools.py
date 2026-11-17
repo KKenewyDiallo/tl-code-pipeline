@@ -338,6 +338,13 @@ async def create_branch(repo: str, branch: str) -> dict:
 
 
 @workflows.activity()
+async def current_branch(repo: str) -> dict:
+    """Nom de la branche courante du clone (cible du push de review)."""
+    res = await _sh(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo)
+    return {"branch": res["output"].strip()}
+
+
+@workflows.activity()
 async def push_branch(repo: str, branch: str) -> dict:
     """Push la branche courante vers le forge : URL authentifiée
     `https://<username>:<PAT>@host/...` passée en argument (jamais persistée

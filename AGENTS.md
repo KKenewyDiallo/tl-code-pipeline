@@ -38,7 +38,9 @@ boucle tests bornée → fusions séquentielles → gate humaine finale → MR o
 4. **Boucles bornées** : `MAX_DEV_ITERATIONS = 3` (dev→tests), `MAX_AGENT_TURNS
    = 20` (boucle d'outils). Au-delà : escalade humaine, jamais de boucle infinie.
 5. **Gates humaines** : (a) approbation de `SPEC.md`, (b) review du
-   diff final. Le workflow dort sur un signal (`approve`/`reject`) —
+   diff final. À la gate finale, un signal `reply` = retour de review : le
+   pipeline corrige la branche, re-push la MR et redemande (`MAX_REVIEW_ROUNDS = 3`
+   tours max, puis escalade). Le workflow dort sur un signal (`approve`/`reject`) —
    voir Waiting for Conditions dans la doc Mistral Workflows. **Interview
    interactif** : pendant la phase spec, l'agent pose des questions
    (signal `reply` via `scripts/talk.py`, transcript lisible via la query
