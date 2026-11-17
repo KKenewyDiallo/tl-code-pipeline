@@ -21,6 +21,7 @@ MAX_AGENT_SECONDS = 15 * 60     # borne wall-clock d'une boucle d'agent (tools l
 MAX_REPEATED_TOOL_CALLS = 3     # même appel tool répété -> réponse finale forcée
 MAX_EMPTY_SPEC_ROUNDS = 3       # tours spec sans QUESTION ni CHANGE_ID -> escalade (pas de boucle vide)
 MAX_PLANNER_ATTEMPTS = 3        # tentatives du planner (prompt strict si réponse vide)
+MAX_REVIEW_ROUNDS = 3           # tours max de review finale (chaque `reply` = retour traité: correction + re-push)
 MAX_API_ATTEMPTS = 3            # retries d'un appel API sur erreur transitoire (429/5xx)
 
 

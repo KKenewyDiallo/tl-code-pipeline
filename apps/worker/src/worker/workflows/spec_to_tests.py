@@ -27,6 +27,7 @@ from worker.agents.definitions import (
     MAX_DEV_ITERATIONS,
     MAX_EMPTY_SPEC_ROUNDS,
     MAX_PLANNER_ATTEMPTS,
+    MAX_REVIEW_ROUNDS,
 )
 
 with wf.unsafe.imports_passed_through():
@@ -126,6 +127,22 @@ class SpecToTests:
             return "timeout"
         verdict, self.verdict = self.verdict, None
         return verdict or "timeout"
+
+    async def _wait_review_verdict(self, consumed: int) -> tuple[str, str]:
+        """Gate review : dort jusqu'à `approve`/`reject` (verdict) OU un nouveau
+        message `reply` (retour de review). Retourne (verdict, feedback)."""
+        try:
+            await wf.wait_condition(
+                lambda: self.verdict is not None or len(self.conversation) > consumed,
+                timeout=GATE_TIMEOUT)
+        except asyncio.TimeoutError:
+            return "timeout", ""
+        if self.verdict is not None:
+            verdict, self.verdict = self.verdict, None
+            return verdict or "timeout", ""
+        feedback = "\n".join(m["text"] for m in self.conversation[consumed:]
+                             if m.get("role") == "human")
+        return "", feedback
 
     @workflows.workflow.entrypoint
     async def run(self, repo: str, request: str) -> dict:
@@ -327,18 +344,44 @@ class SpecToTests:
                 title=f"[{change_id}] pipeline spec-to-tests",
                 description=mr_description,
             )
+        push_target = ((await git_tools.current_branch(repo))["branch"] if repo_url
+                       else release_branch)
         review_link = (mr["mr"] or {}).get("web_url") or f"{repo} (diff vs {base})"
-        await test_runner.open_approval(
-            subject=f"Review finale: {change_id} — MR: {review_link}",
-            payload=f"{review_link}\n\n{diff['diff'][:2000]}\n\nTests:\n{final['log'][:1500]}",
-            execution_id=execution_id,
-        )
-        if await self._wait_verdict() != "approve":
-            return {"status": "rejected_at_review", "change_id": change_id,
-                    "mr": (mr["mr"] or {}).get("web_url")}
 
         # ------------------------------------------------------------------
-        # 7. FIN — pas de merge automatique de la MR (l'auto-merge échouait en
+        # 6. GATE REVIEW — un signal `reply` = retour de review : le pipeline
+        #    corrige la branche, re-push la MR et redemande (MAX_REVIEW_ROUNDS max).
+        for review_round in range(MAX_REVIEW_ROUNDS):
+            await test_runner.open_approval(
+                subject=(f"Review finale: {change_id} — MR: {review_link}"
+                         + (f" (tour {review_round + 1})" if review_round else "")),
+                payload=(f"{review_link}\n\n{diff['diff'][:2000]}\n\nTests:\n{final['log'][:1500]}"
+                         f"\n\n`approve` = validé, `reject` = rejeté, tout autre message (`reply`) "
+                         f"= retour de review traité par le pipeline (correction + re-push)."),
+                execution_id=execution_id,
+            )
+            consumed = len(self.conversation)
+            verdict, feedback = await self._wait_review_verdict(consumed)
+            if verdict == "approve":
+                self.phase = "done"
+                return {"status": "mr_opened", "change_id": change_id,
+                        "mr": (mr.get("mr") or {}).get("web_url"), "tests": final}
+            if verdict == "reject" or not feedback:
+                return {"status": "rejected_at_review", "change_id": change_id,
+                        "mr": (mr["mr"] or {}).get("web_url")}
+            # retour de review (`reply`) -> correctif sur la branche MR, puis re-push
+            self.phase = "review_fix"
+            fix_context = (f"Retour de review sur {review_link} (branche courante « {push_target} » "
+                           f"):\n{feedback}\nCorrige le code en conséquence sans rien casser d'autre.")
+            await agent_runner.run_agent_activity("dev", fix_context, "dev", repo)
+            await git_tools.commit_all(repo, f"review {review_round + 1}: applique le retour de review")
+            final = await test_runner.run_tests(repo)
+            if repo_url:
+                await git_tools.push_branch(repo, push_target)
+            diff = await git_tools.diff_against_base(repo)
+
+        # ------------------------------------------------------------------
+        # 7. ESCALADE — pas de merge automatique de la MR (l'auto-merge échouait en
         # HTTP 405 côté forge) : la MR reste ouverte, merge manuel après review.
         self.phase = "done"
         return {"status": "mr_updated" if mr_info else "mr_opened", "change_id": change_id,
