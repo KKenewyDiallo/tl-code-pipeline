@@ -112,7 +112,10 @@ Rules:
 - One test per WHEN/THEN acceptance criterion in SPEC.md. Name tests after
   the criterion so a human can trace spec -> test.
 - Tests must fail without the implementation and pass with it.
-- Run the full suite before returning; report failures with the exact log.
+- Run only the tests related to the change (`npx jest --runInBand <spec files>`,
+  or `pytest <test files>`): the FULL suite does not fit in the worker RAM (it
+  gets OOM-killed). The CI runs the full suite on the merge request.
+- Report failures with the exact log before returning.
 """
 
 # ---------------------------------------------------------------- REVIEWER --

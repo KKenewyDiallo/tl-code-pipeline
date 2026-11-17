@@ -9,7 +9,7 @@ lors de la conception du projet — respecte-les sans les rediscuter.
 Pipeline multi-agents autonome de développement, exécuté sur **Mistral
 Workflows** (orchestration durable Temporal) :
 **spec (interview développeur + SPEC.md) → gate humaine → plan → dev parallèle (git worktrees) →
-boucle tests bornée → fusions séquentielles → gate humaine finale → merge**.
+boucle tests bornée → fusions séquentielles → gate humaine finale → MR ouverte (merge manuel sur le forge)**.
 
 ## Stack et dépendances
 
@@ -67,8 +67,8 @@ auto-détectée par repo (`test_runner.py::test_cmd_for`, override
 En mode cloud, `--repo` accepte une **URL GitLab** (résolue aussi via
 `gitlab_c8y_repo` / `gitlab_micro_repo`) : le worker clone le repo cible
 (`git_tools.ensure_workspace`, token `gitlab_token`), pousse
-`release/<change_id>`, ouvre une **Merge Request GitLab** et la merge après
-approbation. Les repos cibles restent sur GitLab, inchangés.
+`release/<change_id>` et ouvre une **Merge Request GitLab** (merge manuel après
+approbation — pas de merge automatique). Les repos cibles restent sur GitLab, inchangés.
 
 Gates humaines : signaux `approve`/`reject` sur le workflow
 (`@workflows.workflow.signal` + `wait_condition` dans `spec_to_tests.py`) ;

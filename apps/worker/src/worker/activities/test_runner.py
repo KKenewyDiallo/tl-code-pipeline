@@ -144,6 +144,64 @@ async def ensure_deps(worktree: str, force: bool = False) -> dict:
     return {"log": "\n".join(logs)}
 
 
+_SPEC_SUFFIXES = (".spec.ts", ".spec.tsx", ".spec.js", ".spec.jsx",
+                 ".test.ts", ".test.tsx", ".test.js", ".test.jsx")
+_MAX_SCOPED_TEST_FILES = 30
+
+
+def _related_test_files(worktree: str, changed: list[str]) -> list[str]:
+    """Fichiers de test concernés par une diff : spec modifié directement, spec à
+    côté d'un source modifié (foo.ts -> foo.spec.ts), ou test python (foo.py ->
+    test_foo.py)."""
+    tests: list[str] = []
+    for f in changed:
+        if f.endswith(_SPEC_SUFFIXES):
+            candidates = [f]
+        elif f.endswith((".ts", ".tsx", ".js", ".jsx")):
+            stem = f.rsplit(".", 1)[0]
+            candidates = [stem + s for s in _SPEC_SUFFIXES]
+        elif f.endswith(".py"):
+            d, name = os.path.split(f)
+            stem = name[:-3]
+            candidates = [os.path.join(d, "test_" + stem + ".py"),
+                          os.path.join(d, stem + "_test.py"),
+                          os.path.join("tests", "test_" + stem + ".py")]
+        else:
+            continue
+        for c in candidates:
+            if os.path.isfile(os.path.join(worktree, c)) and c not in tests:
+                tests.append(c)
+                break
+    return tests[:_MAX_SCOPED_TEST_FILES]
+
+
+async def _scoped_test_cmd(worktree: str) -> tuple[list[str] | None, str]:
+    """Commande de tests scopée à la diff vs la branche de base — la suite complète
+    d'un gros front ne tient pas dans la RAM du worker (OOM). Retourne (None, note)
+    si aucun test n'est concerné par la diff."""
+    from worker.activities.git_tools import base_branch
+    cmd = test_cmd_for(worktree)
+    try:
+        base = await base_branch(worktree)
+        res = await _run_logged(["git", "diff", "--name-only", f"{base}...HEAD"],
+                                worktree, 120)
+        if not res["passed"]:
+            return cmd, "[suite complète : git diff vs base a échoué]"
+        changed = [l.strip() for l in res["log"].splitlines()
+                   if l.strip() and not l.lower().startswith(("warning:", "fatal:"))]
+    except Exception:
+        return cmd, "[suite complète : diff vs base indisponible]"
+    related = _related_test_files(worktree, changed)
+    if not related:
+        return None, (f"aucun test concerné par la diff vs {base} — rien à exécuter dans "
+                      f"le worker (la CI exécute la suite complète sur la MR)")
+    scoped = [a for a in cmd if not a.startswith("--maxWorkers")]
+    if cmd[0] == "npm":
+        scoped.append("--runInBand")
+    scoped.extend(related)
+    return scoped, f"[tests scopés à la diff vs {base} : {len(related)} fichier(s)]"
+
+
 @workflows.activity()
 async def run_tests(worktree: str) -> dict:
     if not os.path.isdir(worktree):
@@ -153,33 +211,32 @@ async def run_tests(worktree: str) -> dict:
                         f"redémarré avec un système de fichiers vide)")}
     heap = _node_max_old_space()
     deps = await ensure_deps(worktree)
-    result = await _run_logged(test_cmd_for(worktree), worktree, TEST_TIMEOUT_SECONDS,
-                               extra_env=_node_env(heap))
-    result["log"] = (deps["log"] + "\n" + result["log"]) if deps["log"] else result["log"]
+    cmd, scope_note = await _scoped_test_cmd(worktree)
+    if cmd is None:
+        return {"passed": True, "cmd": "", "log": scope_note}
+    result = await _run_logged(cmd, worktree, TEST_TIMEOUT_SECONDS, extra_env=_node_env(heap))
+    result["log"] = ((deps["log"] + "\n") if deps["log"] else "") + scope_note + "\n" + result["log"]
     if not result["passed"] and _toolchain_missing(result["log"]):
         # node_modules incomplet (ex. npm ci tué par l'OOM d'un run précédent) :
         # on réinstalle une fois puis on retente la suite
         deps = await ensure_deps(worktree, force=True)
-        result = await _run_logged(test_cmd_for(worktree), worktree, TEST_TIMEOUT_SECONDS,
-                                   extra_env=_node_env(heap))
+        result = await _run_logged(cmd, worktree, TEST_TIMEOUT_SECONDS, extra_env=_node_env(heap))
         prefix = (deps["log"] + "\n") if deps["log"] else ""
         result["log"] = (prefix + "[retry après réinstallation des dépendances]\n"
-                         + result["log"])
+                         + scope_note + "\n" + result["log"])
     if result["passed"]:
         return result
     if _looks_like_oom(result["log"]):
         # Stratégie mémoire (RAM worker non réglable côté déploiement) : un unique
-        # retry en --runInBand (1 worker Jest) avec un tas V8 réduit (<= 1024 Mo).
+        # retry avec un tas V8 réduit (<= 1024 Mo).
         try:
             retry_heap = str(min(1024, int(heap)))
         except ValueError:
             retry_heap = "1024"
-        retry_cmd = [a for a in test_cmd_for(worktree) if not a.startswith("--maxWorkers")]
-        retry_cmd.append("--runInBand")
-        retry = await _run_logged(retry_cmd, worktree, TEST_TIMEOUT_SECONDS,
+        retry = await _run_logged(cmd, worktree, TEST_TIMEOUT_SECONDS,
                                   extra_env=_node_env(retry_heap))
         retry["log"] = (result["log"]
-                        + f"\n\n[retry --runInBand, NODE_OPTIONS heap={retry_heap}MB]\n"
+                        + f"\n\n[retry, NODE_OPTIONS heap={retry_heap}MB]\n"
                         + retry["log"])
         retry["retried_in_band"] = True
         if not retry["passed"] and (_looks_like_oom(retry["log"])
