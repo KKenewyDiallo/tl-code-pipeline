@@ -88,10 +88,14 @@ async def _run_logged(cmd: list[str], cwd: str, timeout: int,
                       extra_env: dict | None = None) -> dict:
     if os.name == "nt" and cmd[0] in ("npm", "npx", "ng", "uv"):
         cmd = ["cmd", "/c", *cmd]      # npm/ng/uv sont des .cmd sous Windows
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, cwd=cwd, env={**os.environ, **(extra_env or {})},
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, cwd=cwd, env={**os.environ, **(extra_env or {})},
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        )
+    except OSError as exc:
+        return {"passed": False, "cmd": " ".join(cmd),
+                "log": f"lancement de `{' '.join(cmd)}` impossible (cwd={cwd}) : {exc}"}
     out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     return {"passed": proc.returncode == 0, "cmd": " ".join(cmd),
             "log": out.decode(errors="replace")}
@@ -124,6 +128,11 @@ async def ensure_deps(worktree: str) -> dict:
 
 @workflows.activity()
 async def run_tests(worktree: str) -> dict:
+    if not os.path.isdir(worktree):
+        return {"passed": False, "cmd": "", "missing_worktree": True,
+                "log": (f"worktree introuvable : {worktree} — la gate de tests ne peut pas "
+                        f"s'exécuter (worktree supprimé pendant la boucle dev, ou worker "
+                        f"redémarré avec un système de fichiers vide)")}
     heap = _node_max_old_space()
     deps = await ensure_deps(worktree)
     result = await _run_logged(test_cmd_for(worktree), worktree, TEST_TIMEOUT_SECONDS,

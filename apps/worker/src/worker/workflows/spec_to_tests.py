@@ -337,8 +337,14 @@ class SpecToTests:
             result = await test_runner.run_tests(wt["worktree"])
             if result["passed"]:
                 return wt
+            if result.get("missing_worktree"):
+                raise RuntimeError(
+                    f"task {task['id']}: worktree {wt['worktree']} introuvable — gate de "
+                    f"tests inexécutable (worktree supprimé pendant la boucle dev ou worker "
+                    f"redémarré) ; escalade humaine")
             context += f"\n\nECHEC TESTS (tour {iteration + 1}):\n{result['log'][:3000]}"
 
         raise RuntimeError(
             f"task {task['id']}: boucle non convergée après "
-            f"{MAX_DEV_ITERATIONS} itérations — escalade humaine")
+            f"{MAX_DEV_ITERATIONS} itérations — escalade humaine\n"
+            f"dernier log de tests:\n{result['log'][:2000]}")

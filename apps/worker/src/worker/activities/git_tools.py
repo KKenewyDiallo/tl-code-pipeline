@@ -40,10 +40,13 @@ import mistralai.workflows as workflows
 async def _sh(cmd: list[str], cwd: str, extra_env: dict | None = None) -> dict:
     """Exécute une commande shell, renvoie un résultat JSON-sérialisable."""
     env = {**os.environ, **(extra_env or {})}
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, cwd=cwd, env=env,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, cwd=cwd, env=env,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        )
+    except OSError as exc:
+        return {"code": 127, "output": f"lancement impossible (cwd={cwd}): {exc}"}
     out, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
     return {"code": proc.returncode, "output": out.decode(errors="replace")}
 
