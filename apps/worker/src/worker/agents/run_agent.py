@@ -53,6 +53,30 @@ async def _complete_with_retry(client: Mistral, model: str,
     raise AssertionError("unreachable")
 
 
+def _close_open_tool_calls(messages: list[dict[str, Any]]) -> None:
+    """Ajoute un résultat `tool` pour chaque tool call du dernier message
+    assistant qui n'a pas encore de réponse : l'API refuse (400
+    `invalid_request_message_order`) tout message user qui suit des tool
+    calls sans résultat."""
+    last_assistant = next(
+        (m for m in reversed(messages) if m.get("role") == "assistant"), None
+    )
+    if last_assistant is None:
+        return
+    answered = {m.get("tool_call_id") for m in messages if m.get("role") == "tool"}
+    for call in last_assistant.get("tool_calls") or []:
+        if call.get("id") not in answered:
+            messages.append({
+                "role": "tool",
+                "tool_call_id": call.get("id"),
+                "content": json.dumps(
+                    {"error": "tool call interrompu (limite d'appels répétés atteinte) : "
+                              "réponds maintenant en texte, sans appeler de tool"},
+                    default=str,
+                ),
+            })
+
+
 def _content_text(content: Any) -> str:
     """Contenu d'un message Mistral en texte brut : `str` ou liste de blocs
     (`thinking`, `text`, ...). Les blocs sont des dicts (JSON brut) OU des
@@ -136,6 +160,9 @@ async def run_agent(agent: AgentSpec, user_message: str, tool_impls: dict[str, C
 
     # MAX_AGENT_TURNS atteint : un dernier appel SANS tools force le modèle à
     # répondre en texte avec ce qu'il a déjà lu (la boucle reste bornée).
+    # Tout tool call laissé sans réponse (ex : stop sur appel répété) est
+    # fermé ici, sinon l'API rejette le message user final (400 code 3230).
+    _close_open_tool_calls(messages)
     response = await _complete_with_retry(
         client,
         agent.model,
