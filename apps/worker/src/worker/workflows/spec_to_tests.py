@@ -5,7 +5,10 @@ séquentielles → gate humaine finale → MR ouverte (merge manuel sur le forge
 Entrées :
     repo     : URL du repo cible (https://gitlab.com/<org>/<repo>.git — cloné
                dans `pipeline_workspace`) OU chemin local (mode dev)
-    request  : demande produit de l'humain, en langage naturel
+    request  : demande produit de l'humain, en langage naturel. Peut contenir
+               « MR <iid> » (ex. "repars de la MR 1585 : ...") pour compléter une
+               MR en cours : sa branche source devient la base de travail et le
+               push final la met à jour (la MR n'est pas recréée ni supprimée).
 
 Gates humaines : le workflow enregistre deux signaux `approve` / `reject`
 (scripts/approve.py <execution_id> approve|reject) et dort sur
@@ -132,6 +135,17 @@ class SpecToTests:
         repo, repo_url = ws["path"], ws["url"]
         execution_id = workflows.get_execution_id()
 
+        # Mode « reprendre une MR en cours » : la demande contient « MR <iid> »
+        # (ex. "repars de la MR 1585 : ...") -> on fetch la branche source de la MR
+        # et on travaille dessus ; le push final met à jour CETTE MR (pas de
+        # nouvelle branche release ni de nouvelle MR).
+        mr_info = None
+        if repo_url:
+            m = re.search(r"\bMR\s*#?\s*(\d+)\b", request, re.IGNORECASE)
+            if m:
+                mr_info = await git_tools.get_merge_request(repo_url, int(m.group(1)))
+                await git_tools.checkout_remote_branch(repo, mr_info["source_branch"])
+
         # ------------------------------------------------------------------
         # 1. AGENT SPEC — interview interactif SANS LIMITE DE TOURS :
         #    l'agent pose des questions (ligne "QUESTION: ...") pour valider le
@@ -143,6 +157,11 @@ class SpecToTests:
         #    progression (ni QUESTION ni CHANGE_ID) -> escalade anti boucle vide.
         self.phase = "spec"
         self.conversation.append({"role": "human", "text": request})
+        if mr_info:
+            self.conversation.append({"role": "human", "text": (
+                f"[Contexte : reprise de la MR !{mr_info['iid']} ({mr_info['web_url']}) — "
+                f"la branche source `{mr_info['source_branch']}` est la base de travail ; "
+                f"le push final mettra à jour CETTE MR (ne pas en ouvrir une nouvelle).]")})
         change_id = ""
         round_no = 0
         empty_rounds = 0
@@ -291,7 +310,11 @@ class SpecToTests:
         base = diff["base"]
         release_branch = f"release/{change_id}"
         mr = {"mr": None}
-        if repo_url:
+        if mr_info:
+            # MR en cours : on push les fusions sur SA branche source (fast-forward)
+            await git_tools.push_branch(repo, mr_info["source_branch"])
+            mr = {"mr": {"iid": mr_info["iid"], "web_url": mr_info["web_url"]}}
+        elif repo_url:
             await git_tools.create_branch(repo, release_branch)
             await git_tools.push_branch(repo, release_branch)
             mr_description = diff["diff"][:4000]
@@ -318,7 +341,7 @@ class SpecToTests:
         # 7. FIN — pas de merge automatique de la MR (l'auto-merge échouait en
         # HTTP 405 côté forge) : la MR reste ouverte, merge manuel après review.
         self.phase = "done"
-        return {"status": "mr_opened", "change_id": change_id,
+        return {"status": "mr_updated" if mr_info else "mr_opened", "change_id": change_id,
                 "mr": (mr.get("mr") or {}).get("web_url"), "tests": final}
 
     # ---------------------------------------------------------------- boucle
