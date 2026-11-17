@@ -69,7 +69,7 @@ langage naturel.
    depends_on, acceptance}` ; les interfaces partagées sont dans la première tâche.
 4. **Dev parallèle** — les tâches sans dépendances tournent en parallèle
    (`workflows.workflow.parallel`), chacune dans son worktree. Boucle bornée :
-   dev → commit → tester → `run_tests` ; `MAX_DEV_ITERATIONS = 5` tours max,
+   dev → commit → tester → `run_tests` ; `MAX_DEV_ITERATIONS = 3` tours max,
    sinon escalade humaine (jamais de boucle infinie).
 5. **Fusions séquentielles** — une branche `agent/<task_id>` à la fois, et la
    suite de tests complète est re-jouée après CHAQUE fusion. Conflit → abort +
@@ -84,7 +84,7 @@ langage naturel.
   la branche de base. Les tools shell/fichiers des agents dev sont confinés au
   worktree (`safe_path` bloque tout path traversal, `sudo`, `rm -rf /`,
   `git push`).
-- **Bornes** : `MAX_DEV_ITERATIONS = 5`, `MAX_AGENT_TURNS = 20`.
+- **Bornes** : `MAX_DEV_ITERATIONS = 3`, `MAX_AGENT_TURNS = 20`.
 - **Pas de hors-scope** : un agent dev n'implémente que sa tâche ; le reviewer
   rejette tout hunk hors `files_hint`.
 

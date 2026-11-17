@@ -31,7 +31,7 @@ boucle tests bornée → fusions séquentielles → gate humaine finale → merg
    Jamais de commit directement sur main par un agent.
 3. **Fusions séquentielles** : une branche à la fois, suite de tests complète
    re-jouée après CHAQUE fusion. Conflit → abort + escalade.
-4. **Boucles bornées** : `MAX_DEV_ITERATIONS = 5` (dev→tests), `MAX_AGENT_TURNS
+4. **Boucles bornées** : `MAX_DEV_ITERATIONS = 3` (dev→tests), `MAX_AGENT_TURNS
    = 20` (boucle d'outils). Au-delà : escalade humaine, jamais de boucle infinie.
 5. **Gates humaines** : (a) approbation de `SPEC.md`, (b) review du
    diff final. Le workflow dort sur un signal (`approve`/`reject`) —

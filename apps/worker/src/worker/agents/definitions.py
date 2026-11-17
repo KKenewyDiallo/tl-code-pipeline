@@ -15,7 +15,7 @@ from typing import Any, Callable
 SPEC_MODEL = "mistral-large-latest"
 DEV_MODEL = "mistral-medium-latest"
 
-MAX_DEV_ITERATIONS = 5          # borne de la boucle dev -> tests
+MAX_DEV_ITERATIONS = 3          # borne de la boucle dev -> tests (3 exécutions de run_tests max par tâche)
 MAX_AGENT_TURNS = 20            # borne de la boucle d'outils d'un agent
 MAX_AGENT_SECONDS = 15 * 60     # borne wall-clock d'une boucle d'agent (tools lents)
 MAX_REPEATED_TOOL_CALLS = 3     # même appel tool répété -> réponse finale forcée
