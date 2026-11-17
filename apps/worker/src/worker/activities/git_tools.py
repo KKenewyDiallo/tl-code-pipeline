@@ -400,6 +400,37 @@ async def _gitlab_request(method: str, url: str, body: dict | None = None) -> di
 
 
 @workflows.activity()
+async def get_merge_request(repo_url: str, iid: int) -> dict:
+    """Lit une MR GitLab (GET /projects/:id/merge_requests/:iid) — mode « reprendre
+    une MR en cours » : la MR doit être ouverte, sinon escalade."""
+    api, project = _gitlab_api(repo_url)
+    mr = await _gitlab_request("GET", f"{api}/projects/{project}/merge_requests/{iid}")
+    if "iid" not in mr:
+        raise RuntimeError(f"MR !{iid} introuvable sur {repo_url}: {mr.get('error', mr)}")
+    if mr.get("state") != "opened":
+        raise RuntimeError(f"MR !{iid} n'est pas ouverte (state={mr.get('state')!r}) — rien à compléter")
+    return {"iid": mr["iid"], "source_branch": mr["source_branch"],
+            "target_branch": mr.get("target_branch"), "state": mr["state"],
+            "web_url": mr.get("web_url"), "title": mr.get("title")}
+
+
+@workflows.activity()
+async def checkout_remote_branch(repo: str, branch: str) -> dict:
+    """Fetch une branche distante et la checke out en local (base de travail du
+    pipeline) — utilisée pour reprendre une MR en cours (branche source de la MR)."""
+    url = (await _sh(["git", "config", "remote.origin.url"], repo))["output"].strip()
+    res = await _sh(["git", "fetch", _authed_url(url), branch], repo, extra_env=_git_env())
+    if res["code"] != 0:
+        raise RuntimeError(f"fetch de la branche distante {branch} a échoué: {_scrub(res['output'])}")
+    local = f"pipeline/{branch}"
+    res = await _sh(["git", "checkout", "-f", "-B", local, "FETCH_HEAD"], repo)
+    if res["code"] != 0:
+        raise RuntimeError(f"checkout de la branche {branch} a échoué: {res['output']}")
+    await _ensure_identity(repo)
+    return {"local_branch": local, "remote_branch": branch}
+
+
+@workflows.activity()
 async def open_merge_request(repo_url: str, source_branch: str, target_branch: str,
                              title: str, description: str = "") -> dict:
     """Ouvre une MR sur GitLab (la gate de review humaine devient la review MR)."""

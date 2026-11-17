@@ -70,7 +70,10 @@ En mode cloud, `--repo` accepte une **URL GitLab** (résolue aussi via
 `gitlab_c8y_repo` / `gitlab_micro_repo`) : le worker clone le repo cible
 (`git_tools.ensure_workspace`, token `gitlab_token`), pousse
 `release/<change_id>` et ouvre une **Merge Request GitLab** (merge manuel après
-approbation — pas de merge automatique). Les repos cibles restent sur GitLab, inchangés.
+approbation — pas de merge automatique). Pour **compléter une MR en cours**,
+mettre « MR <iid> » dans la demande (ex. `repars de la MR 1585 : ...`) : le
+pipeline fetch la branche source de la MR, travaille dessus, et push dessus à
+la fin — la MR est mise à jour, jamais supprimée ni recréée. Les repos cibles restent sur GitLab, inchangés.
 
 Gates humaines : signaux `approve`/`reject` sur le workflow
 (`@workflows.workflow.signal` + `wait_condition` dans `spec_to_tests.py`) ;
