@@ -26,13 +26,50 @@ DEP_TIMEOUT_SECONDS = 1800              # npm ci / uv sync sur un clone frais
 REVIEW_TIMEOUT_SECONDS = 24 * 3600     # la gate humaine attend jusqu'à 24h
 
 
+def _env(*names: str) -> str | None:
+    """Première variable d'env non vide parmi `names` (convention minuscule,
+    fallback sur l'ancien nom en majuscules)."""
+    for n in names:
+        val = os.environ.get(n)
+        if val:
+            return val
+    return None
+
+
+def _jest_max_workers() -> str:
+    return _env("pipeline_jest_max_workers", "PIPELINE_JEST_MAX_WORKERS") or "2"
+
+
+def _node_max_old_space() -> str:
+    """Tas V8 max (Mo) pour Node/Jest — env `pipeline_node_max_old_space` (défaut 2048)."""
+    return _env("pipeline_node_max_old_space", "PIPELINE_NODE_MAX_OLD_SPACE") or "2048"
+
+
+def _node_env(heap_mb: str) -> dict:
+    return {"NODE_OPTIONS": f"--max-old-space-size={heap_mb}"}
+
+
+# La spec de déploiement n'expose AUCUN réglage mémoire/CPU (vérifié dans le
+# SDK : backend mistral_cloud/kubernetes sans champ resources) : la RAM du
+# worker est fixée par la plateforme. Stratégie côté tests : Jest borné
+# (--maxWorkers + tas V8), et si le log montre un OOM -> un unique retry
+# --runInBand avec un tas réduit.
+_OOM_MARKERS = ("out of memory", "enomem", "cannot allocate memory", "oomkill", "killed")
+
+
+def _looks_like_oom(log: str) -> bool:
+    low = (log or "").lower()
+    return any(marker in low for marker in _OOM_MARKERS)
+
+
 def test_cmd_for(worktree: str) -> list[str]:
     """Commande de test auto-détectée selon la stack du repo cible :
 
     - repo Python (pyproject.toml à la racine)   -> `uv run pytest -x -q`
       (ex. C:\\projets\\toollive-c8y-microservice)
     - repo Angular/Node (package.json à la racine) -> `npm run test-unit -- --ci`
-      (ex. C:\\projets\\toollive-c8y, Jest via jest-preset-angular)
+      (ex. C:\\projets\\toollive-c8y, Jest via jest-preset-angular ; --maxWorkers borné
+      (2 par défaut), retry --runInBand si le log montre un OOM)
     - override explicite : variable d'env `pipeline_test_cmd`
     """
     override = (os.environ.get("pipeline_test_cmd")
@@ -42,15 +79,17 @@ def test_cmd_for(worktree: str) -> list[str]:
     if os.path.isfile(os.path.join(worktree, "pyproject.toml")):
         return ["uv", "run", "pytest", "-x", "-q"]
     if os.path.isfile(os.path.join(worktree, "package.json")):
-        return ["npm", "run", "test-unit", "--", "--ci", "--silent"]
+        return ["npm", "run", "test-unit", "--", "--ci", "--silent",
+                f"--maxWorkers={_jest_max_workers()}"]
     return TEST_CMD
 
 
-async def _run_logged(cmd: list[str], cwd: str, timeout: int) -> dict:
+async def _run_logged(cmd: list[str], cwd: str, timeout: int,
+                      extra_env: dict | None = None) -> dict:
     if os.name == "nt" and cmd[0] in ("npm", "npx", "ng", "uv"):
         cmd = ["cmd", "/c", *cmd]      # npm/ng/uv sont des .cmd sous Windows
     proc = await asyncio.create_subprocess_exec(
-        *cmd, cwd=cwd,
+        *cmd, cwd=cwd, env={**os.environ, **(extra_env or {})},
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
     )
     out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -68,10 +107,12 @@ async def ensure_deps(worktree: str) -> dict:
     if (os.path.isfile(os.path.join(worktree, "package.json"))
             and not os.path.isdir(os.path.join(worktree, "node_modules"))):
         res = await _run_logged(["npm", "ci", "--no-audit", "--no-fund"],
-                                worktree, DEP_TIMEOUT_SECONDS)
+                                worktree, DEP_TIMEOUT_SECONDS,
+                                extra_env=_node_env(_node_max_old_space()))
         if not res["passed"]:    # lockfile absent ou incompatible -> install
             res2 = await _run_logged(["npm", "install", "--no-audit", "--no-fund"],
-                                     worktree, DEP_TIMEOUT_SECONDS)
+                                     worktree, DEP_TIMEOUT_SECONDS,
+                                     extra_env=_node_env(_node_max_old_space()))
             res = res2 if res2["passed"] else res
         logs.append(res["log"][-2000:])
     if (os.path.isfile(os.path.join(worktree, "pyproject.toml"))
@@ -83,10 +124,28 @@ async def ensure_deps(worktree: str) -> dict:
 
 @workflows.activity()
 async def run_tests(worktree: str) -> dict:
+    heap = _node_max_old_space()
     deps = await ensure_deps(worktree)
-    result = await _run_logged(test_cmd_for(worktree), worktree, TEST_TIMEOUT_SECONDS)
+    result = await _run_logged(test_cmd_for(worktree), worktree, TEST_TIMEOUT_SECONDS,
+                               extra_env=_node_env(heap))
     result["log"] = (deps["log"] + "\n" + result["log"]) if deps["log"] else result["log"]
-    return result
+    if result["passed"] or not _looks_like_oom(result["log"]):
+        return result
+    # Stratégie mémoire (RAM worker non réglable côté déploiement) : un unique
+    # retry en --runInBand (1 worker Jest) avec un tas V8 réduit (<= 1024 Mo).
+    try:
+        retry_heap = str(min(1024, int(heap)))
+    except ValueError:
+        retry_heap = "1024"
+    retry_cmd = [a for a in test_cmd_for(worktree) if not a.startswith("--maxWorkers")]
+    retry_cmd.append("--runInBand")
+    retry = await _run_logged(retry_cmd, worktree, TEST_TIMEOUT_SECONDS,
+                              extra_env=_node_env(retry_heap))
+    retry["log"] = (result["log"]
+                    + f"\n\n[retry --runInBand, NODE_OPTIONS heap={retry_heap}MB]\n"
+                    + retry["log"])
+    retry["retried_in_band"] = True
+    return retry
 
 
 @workflows.activity()

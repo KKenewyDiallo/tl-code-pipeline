@@ -200,6 +200,19 @@ l'outillage des activités : **git**, certificats CA, **Node.js 20 + npm**
 (suite Jest du front) et **uv** (microservice Python). `run_tests` appelle d'abord
 `ensure_deps` : `npm ci` (fallback `npm install`) si `node_modules` manque,
 `uv sync` si `.venv` manque — un clone frais est directement testable.
+**Timeout d'exécution et mémoire du worker** : le timeout d'exécution se déclare
+sur le workflow (`@workflow.define(execution_timeout=...)` — 1h par défaut dans le
+SDK, ce qui produisait des `TIMED_OUT` à 3600004 ms ; le pipeline le monte à 6h via
+`WORKFLOW_EXECUTION_TIMEOUT`). La **mémoire du worker n'est PAS réglable** côté
+déploiement (les specs backend `mistral_cloud`/`kubernetes` n'ont aucun champ
+resources) : la stratégie est côté tests — Jest lancé avec `--maxWorkers=2` et
+`NODE_OPTIONS=--max-old-space-size=2048` (env `pipeline_jest_max_workers` /
+`pipeline_node_max_old_space`), plus un unique retry `--runInBand` (tas ≤ 1024 Mo)
+si le log montre un OOM. L'identité git des commits est posée dans l'image
+(Dockerfile) et en local dans chaque clone/worktree (`_ensure_identity`, surchargeable
+via `pipeline_git_user_name` / `pipeline_git_user_email`) — sans elle, `git commit`
+échoue (« Committer identity unknown »).
+
 `DEPLOYMENT_NAME` sert au
 routage des exécutions, `MISTRAL_API_KEY` (majuscules) est un nom réservé
 injecté automatiquement par le runtime managé — le code lit `mistral_api_key`
@@ -253,6 +266,9 @@ en majuscules, nom réservé injecté par le runtime managé.
 | `gitlab_token` (ou `pipeline_git_token`) | token d'accès GitLab des repos cibles (clone/push/MR) — scopes `read_repository`, `write_repository`, `api` |
 | `approval_webhook_url` | webhook de notification des gates (Slack incoming webhook…) |
 | `pipeline_workspace` | dossier de clone des repos cibles en mode URL (défaut `/tmp/pipeline-workspaces`) |
+| `pipeline_git_user_name` / `pipeline_git_user_email` | identité des commits git (défaut : config de l'image / `code-pipeline <code-pipeline@localhost>`) |
+| `pipeline_jest_max_workers` | workers Jest max (défaut `2`) — borne mémoire, la RAM du worker n'étant pas réglable |
+| `pipeline_node_max_old_space` | tas V8 Node max en Mo (défaut `2048`) |
 | `DEPLOYMENT_NAME` | nom du déploiement worker (requis au boot ; routage des exécutions) |
 
 ## Points à brancher (TODO restants)

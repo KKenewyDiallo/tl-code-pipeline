@@ -137,6 +137,27 @@ def _git_env() -> dict:
     return {"GIT_TERMINAL_PROMPT": "0"}
 
 
+async def _ensure_identity(cwd: str) -> None:
+    """Pose user.name/user.email en LOCAL dans le repo/worktree si absents.
+
+    Sans identité, `git commit` échoue ("Committer identity unknown") —
+    c'est ce qui bloquait les commits de la boucle dev. L'env a la priorité
+    (`pipeline_git_user_name` / `pipeline_git_user_email`, fallback majuscules) ;
+    sinon on garde la config globale du conteneur (posée dans le Dockerfile)
+    si elle existe, sinon des défauts sûrs."""
+    for key, env_names, default in (
+        ("user.name", ("pipeline_git_user_name", "PIPELINE_GIT_USER_NAME"), "code-pipeline"),
+        ("user.email", ("pipeline_git_user_email", "PIPELINE_GIT_USER_EMAIL"), "code-pipeline@localhost"),
+    ):
+        val = _env(*env_names)
+        if not val:
+            cur = await _sh(["git", "config", key], cwd)
+            if cur["output"].strip():
+                continue  # identité globale déjà définie (Dockerfile)
+            val = default
+        await _sh(["git", "config", key, val], cwd)
+
+
 def is_url(repo: str) -> bool:
     return bool(re.match(r"^(?:https?|ssh)://|^[^@/\s]+@[^:/\s]+:", repo))
 
@@ -274,6 +295,7 @@ async def ensure_workspace(repo: str) -> dict:
             raise RuntimeError(f"clone failed: {out}{' — ' + ' | '.join(hints) if hints else ''}")
         await _sh(["git", "remote", "set-url", "origin", repo], dest)
         await _sh(["git", "checkout", "-f", await base_branch(dest)], dest)
+    await _ensure_identity(dest)
     return {"path": dest, "url": repo, "token_present": bool(git_token())}
 
 
@@ -287,6 +309,7 @@ async def create_worktree(repo: str, task_id: str) -> dict:
     res = await _sh(["git", "worktree", "add", "-b", branch, path], repo)
     if res["code"] != 0:
         raise RuntimeError(f"worktree failed: {res['output']}")
+    await _ensure_identity(path)
     return {"repo": repo, "worktree": path, "branch": branch}
 
 
