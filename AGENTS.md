@@ -97,10 +97,22 @@ notification via `open_approval` (webhook `approval_webhook_url`).
   par la plateforme selon l'identité du run — credential utilisateur en local
   (`mistral dev`) ; **credential `atlassian` au scope workspace requis** pour
   les déploiements managés (runs non attended, service account du worker).
+  Le slot est déclaré `run_as="deployment", auto_auth=False` avec
+  `credentials_name` épinglé (env `jira_credentials_name`, défaut `atlassian`) :
+  le preflight `auto_auth` du SDK liste les credentials au scope **user**
+  (`GET /v1/connectors/<id>/user/credentials`) et reçoit un 404 « No consumer
+  found ... type user » quand il est appelé par le service account d'un
+  déploiement managé, ce qui faisait échouer l'exécution entière avant la
+  première activité (exécution `0138f8a4...860559` / run
+  `01a1eef1-1481-701a-bf52-fead246a72ec`). Avec `auto_auth=False`, les appels
+  d'outils passent par la gateway du connecteur, qui résout côté serveur le
+  credential workspace épinglé par `credentials_name`.
 - Env (minuscules, fallback majuscules) : `jira_base_url` (défaut
   `https://toollive.atlassian.net/jira`), `jira_cloud_id` (UUID ou host du site),
   `jira_transition_start` (défaut « In Progress »), `jira_transition_review`
-  (défaut « code-review »), `jira_transition_done` (défaut vide = aucune).
+  (défaut « code-review »), `jira_transition_done` (défaut vide = aucune),
+  `jira_credentials_name` (nom du credential épinglé par le slot connecteur,
+  défaut `atlassian`).
 - `scripts/jira.py` = recherche/lecture de tickets côté client (ton credential :
   `python scripts/jira.py 'project = TOOLLIVE AND created >= -14d ORDER BY created DESC'`).
 - Tests : `uv run --with pytest python -m pytest tests/ -q`.

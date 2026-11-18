@@ -162,6 +162,33 @@ def test_workflow_declares_atlassian_slot():
     assert "atlassian" in json.dumps(meta)
 
 
+def test_atlassian_slot_pinned_for_managed_runs(monkeypatch):
+    monkeypatch.delenv("jira_credentials_name", raising=False)
+    monkeypatch.delenv("JIRA_CREDENTIALS_NAME", raising=False)
+    slot = jt._build_atlassian_connector()
+    assert slot.connector_name == "atlassian"
+    assert slot.run_as.value == "deployment"
+    assert slot.auto_auth is False
+    assert slot.credentials_name == "atlassian"
+    monkeypatch.setenv("jira_credentials_name", "jira-bot")
+    assert jt._build_atlassian_connector().credentials_name == "jira-bot"
+    monkeypatch.setenv("JIRA_CREDENTIALS_NAME", "jira-bot-legacy")
+    monkeypatch.delenv("jira_credentials_name")
+    assert jt._build_atlassian_connector().credentials_name == "jira-bot-legacy"
+
+
+def test_declared_slot_skips_auto_auth_preflight():
+    assert jt.atlassian_connector.run_as.value == "deployment"
+    assert jt.atlassian_connector.auto_auth is False
+
+
+def test_workflow_metadata_disables_connector_preflight():
+    import worker.workflows.spec_to_tests as m
+    meta = json.dumps(getattr(m.SpecToTests, "__plugin_metadata__", {}))
+    assert '"auto_auth": false' in meta
+    assert '"run_as": "deployment"' in meta
+
+
 def test_entrypoint_accepts_jira_issue():
     import worker.workflows.spec_to_tests as m
     fn = m.SpecToTests.run

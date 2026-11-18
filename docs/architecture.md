@@ -85,14 +85,24 @@ langage naturel.
 
 ## Intégration JIRA (connecteur MCP `atlassian`)
 
-Le workflow `spec-to-tests` déclare le slot `connector("atlassian")`
+Le workflow `spec-to-tests` déclare le slot
+`connector("atlassian", run_as="deployment", auto_auth=False, credentials_name=...)`
 (`activities/jira_tools.py::atlassian_connector`) et l'attache via
 `@uses_connectors(atlassian_connector)` (placé après `@workflow.define`).
 Aucun credential dans le code : la plateforme résout les credentials au runtime
 selon l'identité du run — credential **utilisateur** en local (`mistral dev`) ;
 **credential `atlassian` au scope workspace/organisation requis** pour un
 déploiement managé (runs non attended : le service account du worker ne peut
-pas faire d'OAuth interactif).
+pas faire d'OAuth interactif). `run_as="deployment"` épingle l'identité service
+du worker ; `auto_auth=False` désactive le preflight du SDK, dont le listing des
+credentials au scope **user** (`GET /v1/connectors/<id>/user/credentials`)
+répond 404 « No consumer found when listing credentials for type user » pour le
+service account d'un déploiement managé et fait échouer l'exécution entière
+(exécution `0138f8a4...860559`, run `01a1eef1-1481-701a-bf52-fead246a72ec`,
+2026-11-18T13:55Z). Les appels d'outils passent alors directement par la
+gateway du connecteur (`POST /v1/connectors/<id>/tools/<tool>/call`), qui
+résout côté serveur le credential workspace épinglé par `credentials_name`
+(env `jira_credentials_name`, défaut `atlassian`).
 
 Entrée : `jira_issue` (ex. `TOOLLIVE-3600`), passée par
 `python scripts/run.py "..." --repo c8y --jira TOOLLIVE-3600`.
@@ -326,6 +336,7 @@ en majuscules, nom réservé injecté par le runtime managé.
 | `jira_transition_start` | transition JIRA au démarrage du run sur le ticket (défaut `In Progress`) |
 | `jira_transition_review` | transition à l'ouverture de la MR (défaut `code-review`) |
 | `jira_transition_done` | transition finale après approbation (défaut vide = aucune ; merge manuel) |
+| `jira_credentials_name` | nom du credential épinglé par le slot connecteur `atlassian` (défaut `atlassian`, requis au scope workspace pour un déploiement managé) |
 
 ## Points à brancher (TODO restants)
 

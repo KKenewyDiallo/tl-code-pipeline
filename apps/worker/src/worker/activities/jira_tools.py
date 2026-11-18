@@ -8,6 +8,19 @@ l'identité de l'utilisateur : le credential `atlassian` connecté dans Studio s
 En déploiement managé (run non attended), il faut un credential `atlassian` au
 scope workspace/organisation pour que le service account du worker le résolve.
 
+Le slot est déclaré `run_as="deployment"` (identité service du worker — aucun flux
+OAuth interactif possible en non attended) avec `auto_auth=False` : le preflight
+auto_auth du SDK liste les credentials au scope USER
+(`GET /v1/connectors/<id>/user/credentials`), qui répond 404 « No consumer found
+when listing credentials for type user » quand il est appelé par le service account
+d'un déploiement managé, et cette erreur d'activité fait échouer l'exécution entière
+avant même la première activité (exécution `0138f8a4...860559`, run
+`01a1eef1-1481-701a-bf52-fead246a72ec`, 2026-11-18T13:55:39Z). Sans preflight, les
+appels d'outils passent par la gateway du connecteur
+(`POST /v1/connectors/<id>/tools/<tool>/call`), qui résout côté serveur le credential
+épinglé par `credentials_name` (env `jira_credentials_name`, défaut « atlassian »)
+au scope workspace — requis pour un déploiement managé.
+
 Outils MCP utilisés (connecteur Atlassian) :
 - lecture  : getJiraIssue, searchJiraIssuesUsingJql, getTransitionsForJiraIssue
 - écriture : addCommentToJiraIssue, transitionJiraIssue
@@ -28,12 +41,10 @@ from typing import Any
 
 import mistralai.workflows as workflows
 from mistralai.workflows import Depends
-from mistralai.workflows.plugins.mistralai.connectors import ToolCallClient, connector
-
-# Slot déclaré au niveau module ; attaché au workflow via @uses_connectors(...).
-atlassian_connector = connector("atlassian")
+from mistralai.workflows.plugins.mistralai.connectors import ConnectorSlot, ToolCallClient, connector
 
 DEFAULT_JIRA_BASE_URL = "https://toollive.atlassian.net/jira"
+DEFAULT_JIRA_CREDENTIALS_NAME = "atlassian"
 
 ISSUE_FIELDS = ["summary", "description", "status", "issuetype", "priority",
                 "labels", "assignee", "reporter", "comment"]
@@ -48,6 +59,24 @@ def _env(*names: str) -> str | None:
         if val:
             return val
     return None
+
+
+def _build_atlassian_connector() -> ConnectorSlot:
+    """Slot `atlassian` pour runs managés non attended : identité service du worker
+    (`run_as="deployment"`), preflight auto_auth désactivé (son listing des credentials
+    au scope user 404 pour le service account et tue l'exécution), et credential
+    workspace épinglé par nom (`jira_credentials_name`, défaut « atlassian »)."""
+    return connector(
+        "atlassian",
+        run_as="deployment",
+        auto_auth=False,
+        credentials_name=_env("jira_credentials_name", "JIRA_CREDENTIALS_NAME")
+        or DEFAULT_JIRA_CREDENTIALS_NAME,
+    )
+
+
+# Slot déclaré au niveau module ; attaché au workflow via @uses_connectors(...).
+atlassian_connector = _build_atlassian_connector()
 
 
 def cloud_id() -> str:
