@@ -120,6 +120,13 @@ notification via `open_approval` (webhook `approval_webhook_url`).
   "connector_unavailable"}` et le run continue sans le ticket — JIRA ne doit
   jamais tuer le pipeline (commentaires/transitions déjà non bloquants) ; un
   ticket introuvable (mauvaise clé) reste fatal.
+  Même traitement quand la gateway répond 200 mais que le tool MCP renvoie une
+  erreur d'auth dans son contenu (`ConnectorToolCallError`, réponse dans
+  `details`, invisible dans `str(exc)`) — ex. « You don't have permission to
+  connect via API token. Please ask your organization admin for access. »
+  (connecteur `atlassian_94e0` authentifié par API token refusé par l'org ;
+  exécution `0138f8a4...767f50` / run `01a1ef65-f20c-728a-957f-da137a617e40`) :
+  `_is_connector_unavailable` inspecte `str(exc)` ET le texte des `details`.
 - Env (minuscules, fallback majuscules) : `jira_base_url` (défaut
   `https://toollive.atlassian.net/jira`), `jira_cloud_id` (UUID ou host du site),
   `jira_transition_start` (défaut « In Progress »), `jira_transition_review`
