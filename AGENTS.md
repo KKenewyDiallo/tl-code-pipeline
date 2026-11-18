@@ -109,7 +109,7 @@ notification via `open_approval` (webhook `approval_webhook_url`).
   credential épinglé par `credentials_name` si `jira_credentials_name` est
   défini, sinon le credential par défaut du caller (user, puis workspace, puis
   organisation). Nom/ID du connecteur : env `jira_connector_name` (défaut
-  `01a1ef49-c29a-73e1-a6b8-17310e9de9a7` = connecteur workspace `atlassian_94e0`,
+  `01a1ef7f-0488-7652-934c-83b2eca95331` = connecteur workspace `atlassian_94e0`,
   serveur `https://mcp.atlassian.com/v2/mcp`, auth au niveau du connecteur donc
   utilisable par le service account d'un déploiement managé).
   Quand aucun credential n'est utilisable sous l'identité du run (connecteur

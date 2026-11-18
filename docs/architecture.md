@@ -88,7 +88,7 @@ langage naturel.
 Le workflow `spec-to-tests` déclare le slot
 `connector(<jira_connector_name>, run_as="deployment", auto_auth=False, ...)`
 (`activities/jira_tools.py::atlassian_connector`, connecteur par défaut
-`01a1ef49-c29a-73e1-a6b8-17310e9de9a7` = `atlassian_94e0`, serveur
+`01a1ef7f-0488-7652-934c-83b2eca95331` = `atlassian_94e0`, serveur
 `https://mcp.atlassian.com/v2/mcp`, auth au niveau du connecteur — utilisable par
 le service account d'un déploiement managé ; surcharge via `jira_connector_name`) et l'attache via
 `@uses_connectors(atlassian_connector)` (placé après `@workflow.define`).
@@ -351,7 +351,7 @@ en majuscules, nom réservé injecté par le runtime managé.
 | `jira_transition_start` | transition JIRA au démarrage du run sur le ticket (défaut `In Progress`) |
 | `jira_transition_review` | transition à l'ouverture de la MR (défaut `code-review`) |
 | `jira_transition_done` | transition finale après approbation (défaut vide = aucune ; merge manuel) |
-| `jira_connector_name` | ID/nom du connecteur MCP JIRA (défaut `01a1ef49-c29a-73e1-a6b8-17310e9de9a7` = `atlassian_94e0`, serveur mcp.atlassian.com/v2/mcp) |
+| `jira_connector_name` | ID/nom du connecteur MCP JIRA (défaut `01a1ef7f-0488-7652-934c-83b2eca95331` = `atlassian_94e0`, serveur mcp.atlassian.com/v2/mcp) |
 | `jira_credentials_name` | nom du credential épinglé par le slot connecteur (vide par défaut = credential par défaut du caller : user, puis workspace, puis organisation) |
 
 ## Points à brancher (TODO restants)

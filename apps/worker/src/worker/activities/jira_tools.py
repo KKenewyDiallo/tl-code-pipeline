@@ -20,7 +20,7 @@ appels d'outils passent par la gateway du connecteur
 (`POST /v1/connectors/<id>/tools/<tool>/call`), qui résout côté serveur le credential
 épinglé par `credentials_name` (env `jira_credentials_name`, si défini) ou, à défaut,
 le credential par défaut du caller (user, puis workspace, puis organisation). Nom du
-connecteur : env `jira_connector_name` (défaut `01a1ef49-c29a-73e1-a6b8-17310e9de9a7`
+connecteur : env `jira_connector_name` (défaut `01a1ef7f-0488-7652-934c-83b2eca95331`
 = connecteur workspace `atlassian_94e0`, serveur `https://mcp.atlassian.com/v2/mcp`,
 auth configurée au niveau du connecteur — utilisable par le service account d'un
 déploiement managé).
@@ -73,7 +73,7 @@ from mistralai.workflows.plugins.mistralai.connectors import ConnectorSlot, Tool
 DEFAULT_JIRA_BASE_URL = "https://toollive.atlassian.net/jira"
 # Connecteur workspace `atlassian_94e0` (id 01a1ef49-...), serveur
 # https://mcp.atlassian.com/v2/mcp, auth au niveau du connecteur (service account).
-DEFAULT_JIRA_CONNECTOR_NAME = "01a1ef49-c29a-73e1-a6b8-17310e9de9a7"
+DEFAULT_JIRA_CONNECTOR_NAME = "01a1ef7f-0488-7652-934c-83b2eca95331"
 
 ISSUE_FIELDS = ["summary", "description", "status", "issuetype", "priority",
                 "labels", "assignee", "reporter", "comment"]

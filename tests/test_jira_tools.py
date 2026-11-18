@@ -169,7 +169,7 @@ class FakeMcpToolError(Exception):
     malgré un HTTP 200 de la gateway)."""
 
     def __init__(self, response):
-        super().__init__("[01a1ef49-c29a-73e1-a6b8-17310e9de9a7] connector tool call failed")
+        super().__init__("[01a1ef7f-0488-7652-934c-83b2eca95331] connector tool call failed")
         self.details = (response,)
 
 
@@ -297,7 +297,7 @@ def test_atlassian_slot_configured_for_managed_runs(monkeypatch):
                 "jira_credentials_name", "JIRA_CREDENTIALS_NAME"):
         monkeypatch.delenv(var, raising=False)
     slot = jt._build_atlassian_connector()
-    assert slot.connector_name == jt.DEFAULT_JIRA_CONNECTOR_NAME == "01a1ef49-c29a-73e1-a6b8-17310e9de9a7"
+    assert slot.connector_name == jt.DEFAULT_JIRA_CONNECTOR_NAME == "01a1ef7f-0488-7652-934c-83b2eca95331"
     assert slot.run_as.value == "deployment"
     assert slot.auto_auth is False
     assert slot.credentials_name is None
