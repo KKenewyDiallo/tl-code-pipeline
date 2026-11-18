@@ -32,6 +32,14 @@ user-only, ex. déploiement managé sans credential workspace), l'appel d'outil 
 `fetch_jira_issue` traite alors le connecteur comme indisponible
 (`{"ok": False, "reason": "connector_unavailable"}`) et le run continue sans le ticket,
 au lieu d'échouer entièrement. Un ticket introuvable (mauvaise clé) reste fatal.
+Même traitement quand la gateway répond 200 mais que le tool MCP renvoie une erreur
+d'auth DANS son contenu (`ConnectorToolCallError`, réponse dans `details`, invisible
+dans `str(exc)`) — ex. « You don't have permission to connect via API token. Please
+ask your organization admin for access. » quand le connecteur `atlassian_94e0`
+s'authentifie auprès de mcp.atlassian.com avec un API token refusé par l'org
+(exécution `0138f8a4...767f50`, run `01a1ef65-f20c-728a-957f-da137a617e40`,
+2026-11-18T16:03Z) : `_is_connector_unavailable` inspecte `str(exc)` ET le texte des
+`details` de l'exception.
 
 Outils MCP utilisés (connecteur Atlassian) :
 - lecture  : getJiraIssue, searchJiraIssuesUsingJql, getTransitionsForJiraIssue
@@ -259,17 +267,49 @@ _CONNECTOR_UNAVAILABLE_MARKERS = (
     "no connection this caller can use",
     "no consumer found",
     "not found for connector",
+    "permission to connect",
+    "connect via api token",
+    "api token authentication",
+    "authentication failed",
+    "authentication required",
+    "not authenticated",
 )
 
 
+def _exc_text(exc: BaseException) -> str:
+    """Texte complet d'une exception : son message plus le contenu des détails
+    qu'elle embarque. `ConnectorToolCallError` (tool MCP renvoyé en erreur malgré un
+    HTTP 200 de la gateway) porte la réponse MCP — et son message d'erreur d'auth —
+    dans `details`, invisible dans `str(exc)`."""
+    parts = [str(exc)]
+    for carrier in (getattr(exc, "response", None), getattr(exc, "details", None)):
+        if carrier is None:
+            continue
+        items = carrier if isinstance(carrier, (list, tuple)) else (carrier,)
+        for item in items:
+            try:
+                text = _blocks_text(item)
+            except Exception:
+                text = ""
+            parts.append(text or str(item))
+    return "\n".join(p for p in parts if p)
+
+
 def _is_connector_unavailable(exc: BaseException) -> bool:
-    """Vrai si l'erreur vient de l'identité du run sur le connecteur (401/403 de la
-    gateway, credential introuvable pour ce caller) et non du ticket demandé :
-    ex. déploiement managé sans credential workspace sur un connecteur OAuth user-only
-    (exécution `0138f8a4...66ea`, run `01a1ef07-2634-701c-9223-1320f1e38a36`)."""
+    """Vrai si l'erreur vient de l'identité du run sur le connecteur et non du ticket
+    demandé : 401/403 de la gateway, credential introuvable pour ce caller (ex.
+    déploiement managé sans credential workspace sur un connecteur OAuth user-only —
+    exécution `0138f8a4...66ea`, run `01a1ef07-2634-701c-9223-1320f1e38a36`), ou erreur
+    d'auth renvoyée DANS le contenu du tool MCP (HTTP 200, `ConnectorToolCallError`
+    dont la réponse est dans `details`) — ex. « You don't have permission to connect via
+    API token. Please ask your organization admin for access. » quand le connecteur
+    `atlassian_94e0` s'authentifie auprès de mcp.atlassian.com avec un API token refusé
+    par l'org (exécution `0138f8a4...767f50`, run
+    `01a1ef65-f20c-728a-957f-da137a617e40`, 2026-11-18T16:03Z). Un ticket introuvable
+    (mauvaise clé) reste fatal."""
     if getattr(exc, "status_code", None) in (401, 403):
         return True
-    msg = str(exc).lower()
+    msg = _exc_text(exc).lower()
     return any(marker in msg for marker in _CONNECTOR_UNAVAILABLE_MARKERS)
 
 
@@ -282,7 +322,7 @@ async def _fetch_issue_or_unavailable(jira: ToolCallClient, issue_key: str) -> d
         return await _fetch_issue(jira, issue_key)
     except Exception as exc:
         if _is_connector_unavailable(exc):
-            return {"ok": False, "reason": "connector_unavailable", "error": str(exc)[:300]}
+            return {"ok": False, "reason": "connector_unavailable", "error": _exc_text(exc)[:300]}
         raise
 
 
@@ -349,7 +389,8 @@ async def fetch_jira_issue(issue_key: str,
                            jira: ToolCallClient = Depends(atlassian_connector)) -> dict:
     """Lit un ticket JIRA (getJiraIssue) et le normalise. Échoue fort si le ticket
     est introuvable — une mauvaise clé passée en entrée doit arrêter le run. Si le
-    connecteur est inutilisable sous l'identité du run (401/403 gateway), retourne
+    connecteur est inutilisable sous l'identité du run (401/403 gateway, ou erreur
+    d'auth MCP renvoyée dans le contenu du tool), retourne
     {"ok": False, "reason": "connector_unavailable"} : le run continue sans JIRA."""
     return await _fetch_issue_or_unavailable(jira, issue_key)
 

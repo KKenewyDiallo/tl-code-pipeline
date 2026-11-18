@@ -163,6 +163,43 @@ def test_fetch_issue_or_unavailable_raises_on_other_errors():
         asyncio.run(jt._fetch_issue_or_unavailable(stub, "TOOLLIVE-3600"))
 
 
+class FakeMcpToolError(Exception):
+    """Simule ConnectorToolCallError : str(exc) générique, réponse MCP dans `details`
+    (invisible dans str(exc), comme en prod quand le tool renvoie une erreur MCP
+    malgré un HTTP 200 de la gateway)."""
+
+    def __init__(self, response):
+        super().__init__("[01a1ef49-c29a-73e1-a6b8-17310e9de9a7] connector tool call failed")
+        self.details = (response,)
+
+
+def _mcp_error_response(message: str):
+    return {"content": [{"type": "text", "text": json.dumps({"error": True, "message": message})}]}
+
+
+def test_fetch_issue_soft_on_mcp_api_token_permission_error():
+    """Cas prod : exécution 0138f8a4...767f50 / run 01a1ef65-f20c-728a-957f-da137a617e40
+    (2026-11-18T16:03Z) — la gateway répond 200 mais le tool getJiraIssue renvoie
+    « You don't have permission to connect via API token. Please ask your organization
+    admin for access. » dans son contenu : le run doit continuer sans le ticket."""
+    stub = StubClient({}, errors={"getJiraIssue": FakeMcpToolError(_mcp_error_response(
+        "You don't have permission to connect via API token. "
+        "Please ask your organization admin for access."))})
+    out = asyncio.run(jt._fetch_issue_or_unavailable(stub, "TOOLLIVE-3601"))
+    assert out["ok"] is False
+    assert out["reason"] == "connector_unavailable"
+    assert "api token" in out["error"].lower()
+
+
+def test_fetch_issue_still_fatal_on_issue_level_mcp_error():
+    """Erreur MCP au niveau du ticket (mauvaise clé) : ce n'est PAS un connecteur
+    indisponible, l'exception doit remonter (ticket introuvable = fatal)."""
+    stub = StubClient({}, errors={"getJiraIssue": FakeMcpToolError(_mcp_error_response(
+        "Issue does not exist or you do not have permission to see it."))})
+    with pytest.raises(FakeMcpToolError):
+        asyncio.run(jt._fetch_issue_or_unavailable(stub, "NOPE-1"))
+
+
 def test_comment_ok_and_non_blocking_error():
     stub = StubClient({"addCommentToJiraIssue": {"id": "1"}})
     out = asyncio.run(jt._comment(stub, "TOOLLIVE-3600", "hello"))
