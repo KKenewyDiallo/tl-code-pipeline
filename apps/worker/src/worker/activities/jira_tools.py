@@ -40,6 +40,11 @@ s'authentifie auprès de mcp.atlassian.com avec un API token refusé par l'org
 (exécution `0138f8a4...767f50`, run `01a1ef65-f20c-728a-957f-da137a617e40`,
 2026-11-18T16:03Z) : `_is_connector_unavailable` inspecte `str(exc)` ET le texte des
 `details` de l'exception.
+Même traitement quand le tool renvoie une erreur de scopes insuffisants (403
+« Insufficient scopes for "getJiraIssue". Required: [read:jira:agent-interface] » —
+credential résolu sur le connecteur `atlassian_49bb` sans le scope demandé ;
+exécution `0138f8a4...c2740`, run `01a1ef8e-f451-75d8-b273-e66aae99cec2`,
+2026-11-18T16:48Z) : marqueur « insufficient scope ».
 
 Outils MCP utilisés (connecteur Atlassian) :
 - lecture  : getJiraIssue, searchJiraIssuesUsingJql, getTransitionsForJiraIssue
@@ -273,6 +278,8 @@ _CONNECTOR_UNAVAILABLE_MARKERS = (
     "authentication failed",
     "authentication required",
     "not authenticated",
+    "insufficient scope",
+    "use discover to find endpoints you have access to",
 )
 
 
@@ -305,8 +312,12 @@ def _is_connector_unavailable(exc: BaseException) -> bool:
     API token. Please ask your organization admin for access. » quand le connecteur
     `atlassian_94e0` s'authentifie auprès de mcp.atlassian.com avec un API token refusé
     par l'org (exécution `0138f8a4...767f50`, run
-    `01a1ef65-f20c-728a-957f-da137a617e40`, 2026-11-18T16:03Z). Un ticket introuvable
-    (mauvaise clé) reste fatal."""
+    `01a1ef65-f20c-728a-957f-da137a617e40`, 2026-11-18T16:03Z). Même traitement pour
+    une erreur de scopes insuffisants renvoyée dans le contenu du tool (403
+    « Insufficient scopes for "getJiraIssue". Required: [read:jira:agent-interface] » —
+    credential résolu sur le connecteur `atlassian_49bb` sans le scope demandé ;
+    exécution `0138f8a4...c2740`, run `01a1ef8e-f451-75d8-b273-e66aae99cec2`,
+    2026-11-18T16:48Z). Un ticket introuvable (mauvaise clé) reste fatal."""
     if getattr(exc, "status_code", None) in (401, 403):
         return True
     msg = _exc_text(exc).lower()

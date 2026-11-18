@@ -173,8 +173,11 @@ class FakeMcpToolError(Exception):
         self.details = (response,)
 
 
-def _mcp_error_response(message: str):
-    return {"content": [{"type": "text", "text": json.dumps({"error": True, "message": message})}]}
+def _mcp_error_response(message: str, status_code: int | None = None):
+    payload = {"error": True, "message": message}
+    if status_code is not None:
+        payload["statusCode"] = status_code
+    return {"content": [{"type": "text", "text": json.dumps(payload)}]}
 
 
 def test_fetch_issue_soft_on_mcp_api_token_permission_error():
@@ -189,6 +192,31 @@ def test_fetch_issue_soft_on_mcp_api_token_permission_error():
     assert out["ok"] is False
     assert out["reason"] == "connector_unavailable"
     assert "api token" in out["error"].lower()
+
+
+def test_fetch_issue_soft_on_mcp_insufficient_scopes_error():
+    """Cas prod : exécution 0138f8a4...c2740 / run 01a1ef8e-f451-75d8-b273-e66aae99cec2
+    (2026-11-18T16:48Z) — la gateway répond 200 mais le tool getJiraIssue du connecteur
+    atlassian_49bb (01a1ef7f-0488-7652-934c-83b2eca95331) renvoie dans son contenu
+    403 « Insufficient scopes for "getJiraIssue". Required: [read:jira:agent-interface].
+    Use discover to find endpoints you have access to. » : le run doit continuer sans
+    le ticket (JIRA ne tue jamais le pipeline)."""
+    stub = StubClient({}, errors={"getJiraIssue": FakeMcpToolError(_mcp_error_response(
+        'Insufficient scopes for "getJiraIssue". Required: [read:jira:agent-interface]. '
+        "Use discover to find endpoints you have access to.", status_code=403))})
+    out = asyncio.run(jt._fetch_issue_or_unavailable(stub, "TOOLLIVE-3602"))
+    assert out["ok"] is False
+    assert out["reason"] == "connector_unavailable"
+    assert "insufficient scopes" in out["error"].lower()
+
+
+def test_fetch_issue_still_fatal_on_issue_level_403_mcp_error():
+    """Une 403 au niveau du ticket (et non des scopes du connecteur) reste fatale :
+    seul « insufficient scope » est traité comme connecteur indisponible."""
+    stub = StubClient({}, errors={"getJiraIssue": FakeMcpToolError(_mcp_error_response(
+        "Issue does not exist or you do not have permission to see it.", status_code=403))})
+    with pytest.raises(FakeMcpToolError):
+        asyncio.run(jt._fetch_issue_or_unavailable(stub, "NOPE-1"))
 
 
 def test_fetch_issue_still_fatal_on_issue_level_mcp_error():
