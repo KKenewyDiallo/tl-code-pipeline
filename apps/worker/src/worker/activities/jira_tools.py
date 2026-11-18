@@ -210,11 +210,15 @@ _TOOL_FALLBACKS = {
 
 
 def _is_unknown_tool(exc: BaseException) -> bool:
-    """Vrai si la gateway répond que l'outil demandé n'existe pas sur le connecteur."""
+    """Vrai si l'outil demandé n'existe pas sur le connecteur : 404 de la gateway
+    (« Tool ... not found ») OU erreur MCP renvoyée DANS le contenu du tool avec un
+    HTTP 200 de la gateway (serveur v2 : « Unknown tool: '<nom>' » ; cas prod exécution
+    `0138f8a4...b2363` / run `01a1f00d-42f0-7593-8576-dbf2d3a55e33` — le texte est dans
+    `details` de la ConnectorToolCallError, invisible dans str(exc), d'où `_exc_text`)."""
     if getattr(exc, "status_code", None) == 404 and "tool" in str(exc).lower():
         return True
-    msg = str(exc).lower()
-    return "tool" in msg and "not found" in msg
+    msg = _exc_text(exc).lower()
+    return ("tool" in msg and "not found" in msg) or "unknown tool" in msg
 
 
 async def _call(jira: ToolCallClient, tool: str, **arguments: Any) -> Any:
