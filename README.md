@@ -102,12 +102,20 @@ Avec `--jira <CLE>` (input `jira_issue` du workflow) :
 
 Variables d'env (minuscules) : `jira_base_url` (défaut
 `https://toollive.atlassian.net/jira`), `jira_cloud_id` (UUID ou host du site),
-`jira_transition_start|review|done`. Détail : `docs/architecture.md`.
+`jira_transition_start|review|done`, `jira_credentials_name` (credential
+épinglé par le slot connecteur, défaut `atlassian`). Détail : `docs/architecture.md`.
 
 **Déploiement managé** : les runs non attended résolvent le connecteur côté
 service account du worker — il faut un credential `atlassian` au scope
 **workspace** (Studio > Connectors > atlassian > Credentials). En local
-(`mistral dev`), ton credential utilisateur suffit.
+(`mistral dev`), ton credential utilisateur suffit. Le slot est déclaré
+`run_as="deployment", auto_auth=False` avec `credentials_name` épinglé (env
+`jira_credentials_name`, défaut `atlassian`) : le preflight `auto_auth` liste
+les credentials au scope user et 404 pour le service account d'un déploiement
+managé (exécution `0138f8a4...860559` / run `01a1eef1-1481`), ce qui tuait
+l'exécution avant la première activité ; sans preflight, les appels d'outils
+passent par la gateway du connecteur qui résout le credential workspace épinglé
+côté serveur.
 
 ## Points clés
 
