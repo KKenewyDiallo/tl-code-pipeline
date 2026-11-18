@@ -124,6 +124,45 @@ def test_fetch_issue_not_found_raises():
         asyncio.run(jt._fetch_issue(stub, "NOPE-1"))
 
 
+def test_fetch_issue_unwraps_v2_data_envelope():
+    """Cas prod : exécution 0138f8a4...a2a9c / run 01a1effa-ca7a-773e-ada1-335119a7aae7
+    (2026-11-18T18:45Z) — le connecteur atlassian_49bb (serveur MCP v2) enveloppe le
+    ticket dans {"data": {...}} : getJiraIssue renvoie bien TOOLLIVE-3601 (id 62981)
+    mais « key » n'est pas au premier niveau ; l'ancien code levait un faux
+    « introuvable ou illisible » et tuait le run."""
+    v2 = {"data": {"appliedContentFormat": "markdown", "id": "62981", "key": "TOOLLIVE-3601",
+                   "fields": {"summary": "[Test ADLC] Le nombre d'assets n'est pas bon",
+                              "description": "Remplacer «50000 connected assets» par «90000+ connected assets»",
+                              "status": {"name": "new", "statusCategory": {"name": "To Do"}},
+                              "assignee": None, "priority": {"name": "Medium"}, "labels": []}}}
+    stub = StubClient({"getJiraIssue": v2})
+    out = asyncio.run(jt._fetch_issue(stub, "TOOLLIVE-3601"))
+    assert out["key"] == "TOOLLIVE-3601"
+    assert out["id"] == "62981"
+    assert out["summary"] == "[Test ADLC] Le nombre d'assets n'est pas bon"
+    assert out["status"] == "new"
+    assert out["url"].endswith("/browse/TOOLLIVE-3601")
+
+
+def test_fetch_issue_wrapped_error_still_fatal():
+    stub = StubClient({"getJiraIssue": {"data": {"errorMessages": ["Issue does not exist"]}}})
+    with pytest.raises(RuntimeError, match="introuvable"):
+        asyncio.run(jt._fetch_issue(stub, "NOPE-1"))
+
+
+def test_search_unwraps_v2_data_envelope():
+    stub = StubClient({"searchJiraIssuesUsingJql": {"data": {"issues": [ISSUE]}}})
+    out = asyncio.run(jt._search(stub, "key = TOOLLIVE-3600", 5))
+    assert out[0]["key"] == "TOOLLIVE-3600" and out[0]["status"] == "new"
+
+
+def test_transition_unwraps_v2_data_envelope():
+    stub = StubClient({"getTransitionsForJiraIssue": {"data": TRANSITIONS},
+                      "transitionJiraIssue": {}})
+    out = asyncio.run(jt._transition(stub, "TOOLLIVE-3600", "code-review"))
+    assert out["ok"] is True and out["to"] == "code-review"
+
+
 class FakeGatewayError(Exception):
     """Simule une SDKError de la gateway connecteurs (status_code + body)."""
 
