@@ -18,8 +18,18 @@ avant même la première activité (exécution `0138f8a4...860559`, run
 `01a1eef1-1481-701a-bf52-fead246a72ec`, 2026-11-18T13:55:39Z). Sans preflight, les
 appels d'outils passent par la gateway du connecteur
 (`POST /v1/connectors/<id>/tools/<tool>/call`), qui résout côté serveur le credential
-épinglé par `credentials_name` (env `jira_credentials_name`, défaut « atlassian »)
-au scope workspace — requis pour un déploiement managé.
+épinglé par `credentials_name` (env `jira_credentials_name`, si défini) ou, à défaut,
+le credential par défaut du caller (user, puis workspace, puis organisation). Nom du
+connecteur : env `jira_connector_name` (défaut « atlassian » — le nom Studio peut être
+suffixé, ex. `atlassian_47af`).
+
+Quand aucun credential n'est utilisable sous l'identité du run (connecteur OAuth
+user-only, ex. déploiement managé sans credential workspace), l'appel d'outil renvoie
+401 « Authentication failed against MCP server while calling tool » (exécution
+`0138f8a4...66ea`, run `01a1ef07-2634-701c-9223-1320f1e38a36`, 2026-11-18T14:19Z) :
+`fetch_jira_issue` traite alors le connecteur comme indisponible
+(`{"ok": False, "reason": "connector_unavailable"}`) et le run continue sans le ticket,
+au lieu d'échouer entièrement. Un ticket introuvable (mauvaise clé) reste fatal.
 
 Outils MCP utilisés (connecteur Atlassian) :
 - lecture  : getJiraIssue, searchJiraIssuesUsingJql, getTransitionsForJiraIssue
@@ -44,7 +54,7 @@ from mistralai.workflows import Depends
 from mistralai.workflows.plugins.mistralai.connectors import ConnectorSlot, ToolCallClient, connector
 
 DEFAULT_JIRA_BASE_URL = "https://toollive.atlassian.net/jira"
-DEFAULT_JIRA_CREDENTIALS_NAME = "atlassian"
+DEFAULT_JIRA_CONNECTOR_NAME = "atlassian"
 
 ISSUE_FIELDS = ["summary", "description", "status", "issuetype", "priority",
                 "labels", "assignee", "reporter", "comment"]
@@ -62,16 +72,18 @@ def _env(*names: str) -> str | None:
 
 
 def _build_atlassian_connector() -> ConnectorSlot:
-    """Slot `atlassian` pour runs managés non attended : identité service du worker
-    (`run_as="deployment"`), preflight auto_auth désactivé (son listing des credentials
-    au scope user 404 pour le service account et tue l'exécution), et credential
-    workspace épinglé par nom (`jira_credentials_name`, défaut « atlassian »)."""
+    """Slot connecteur JIRA pour runs managés non attended : identité service du
+    worker (`run_as="deployment"`), preflight auto_auth désactivé (son listing des
+    credentials au scope user 404 pour le service account et tue l'exécution).
+    Nom du connecteur : env `jira_connector_name` (défaut « atlassian », le nom Studio
+    peut être suffixé ex. `atlassian_47af`). Credential : épinglé par nom seulement si
+    `jira_credentials_name` est défini, sinon la gateway résout le credential par
+    défaut (user, puis workspace, puis organisation)."""
     return connector(
-        "atlassian",
+        _env("jira_connector_name", "JIRA_CONNECTOR_NAME") or DEFAULT_JIRA_CONNECTOR_NAME,
         run_as="deployment",
         auto_auth=False,
-        credentials_name=_env("jira_credentials_name", "JIRA_CREDENTIALS_NAME")
-        or DEFAULT_JIRA_CREDENTIALS_NAME,
+        credentials_name=_env("jira_credentials_name", "JIRA_CREDENTIALS_NAME"),
     )
 
 
@@ -203,6 +215,38 @@ async def _fetch_issue(jira: ToolCallClient, issue_key: str) -> dict:
     return _issue_detail(result)
 
 
+_CONNECTOR_UNAVAILABLE_MARKERS = (
+    "authentication failed against mcp server",
+    "no connection this caller can use",
+    "no consumer found",
+    "not found for connector",
+)
+
+
+def _is_connector_unavailable(exc: BaseException) -> bool:
+    """Vrai si l'erreur vient de l'identité du run sur le connecteur (401/403 de la
+    gateway, credential introuvable pour ce caller) et non du ticket demandé :
+    ex. déploiement managé sans credential workspace sur un connecteur OAuth user-only
+    (exécution `0138f8a4...66ea`, run `01a1ef07-2634-701c-9223-1320f1e38a36`)."""
+    if getattr(exc, "status_code", None) in (401, 403):
+        return True
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _CONNECTOR_UNAVAILABLE_MARKERS)
+
+
+async def _fetch_issue_or_unavailable(jira: ToolCallClient, issue_key: str) -> dict:
+    """Lit le ticket ; si le connecteur est inutilisable sous l'identité du run,
+    retourne {"ok": False, "reason": "connector_unavailable", ...} au lieu de faire
+    échouer l'exécution (le pipeline continue sans le ticket). Un ticket
+    introuvable (mauvaise clé en entrée) reste une erreur fatale."""
+    try:
+        return await _fetch_issue(jira, issue_key)
+    except Exception as exc:
+        if _is_connector_unavailable(exc):
+            return {"ok": False, "reason": "connector_unavailable", "error": str(exc)[:300]}
+        raise
+
+
 async def _search(jira: ToolCallClient, jql: str, max_results: int) -> list:
     result = await _call(
         jira, "searchJiraIssuesUsingJql",
@@ -258,8 +302,10 @@ async def _transition(jira: ToolCallClient, issue_key: str, transition_name: str
 async def fetch_jira_issue(issue_key: str,
                            jira: ToolCallClient = Depends(atlassian_connector)) -> dict:
     """Lit un ticket JIRA (getJiraIssue) et le normalise. Échoue fort si le ticket
-    est introuvable — une mauvaise clé passée en entrée doit arrêter le run."""
-    return await _fetch_issue(jira, issue_key)
+    est introuvable — une mauvaise clé passée en entrée doit arrêter le run. Si le
+    connecteur est inutilisable sous l'identité du run (401/403 gateway), retourne
+    {"ok": False, "reason": "connector_unavailable"} : le run continue sans JIRA."""
+    return await _fetch_issue_or_unavailable(jira, issue_key)
 
 
 @workflows.activity()
