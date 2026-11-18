@@ -46,6 +46,9 @@ python scripts/run.py "Ajouter ..." --repo micro   # microservice Python
 # mode cloud (repos cibles sur GitLab) :
 #   export gitlab_c8y_repo=https://gitlab.com/<org>/toollive-c8y.git
 #   python scripts/run.py "Ajouter ..." --repo c8y
+# traiter un ticket JIRA directement (connecteur MCP `atlassian`) :
+#   python scripts/jira.py 'project = TOOLLIVE AND statusCategory = "To Do" ORDER BY created DESC'
+#   python scripts/run.py "implemente le ticket" --repo c8y --jira TOOLLIVE-3600
 
 # 5. Interagir avec le workflow en cours (notification webhook avec l'execution_id) :
 python scripts/status.py <execution_id>                       # état + transcript de l'agent
@@ -74,6 +77,38 @@ La commande de test est auto-détectée selon le repo (override :
 `pipeline_base_branch`). Toutes les variables d'env du pipeline sont en
 minuscules.
 
+## JIRA — traiter un ticket directement
+
+Le workflow est branché sur le connecteur MCP **`atlassian`** (Studio >
+Connectors) : aucun credential dans le code, la plateforme résout les
+credentials au runtime selon l'identité du run.
+
+```bash
+python scripts/jira.py 'project = TOOLLIVE AND statusCategory = "To Do" ORDER BY created DESC'  # chercher un ticket
+python scripts/run.py "implemente le ticket" --repo c8y --jira TOOLLIVE-3600                    # lancer le pipeline dessus
+```
+
+Avec `--jira <CLE>` (input `jira_issue` du workflow) :
+
+- le ticket est lu via `getJiraIssue` (description + commentaires) et alimente
+  la demande de l'agent spec ;
+- transition de démarrage (`jira_transition_start`, défaut « In Progress »)
+  + commentaire avec l'`execution_id` et les commandes (`status.py`,
+  `approve.py`, `talk.py`) ;
+- chaque gate humaine est aussi commentée sur le ticket ; à l'ouverture de la
+  MR : transition `jira_transition_review` (défaut « code-review ») + commentaire
+  avec le lien de la MR ; en fin de run : commentaire final (+ transition
+  `jira_transition_done` si définie, vide par défaut — le merge reste manuel).
+
+Variables d'env (minuscules) : `jira_base_url` (défaut
+`https://toollive.atlassian.net/jira`), `jira_cloud_id` (UUID ou host du site),
+`jira_transition_start|review|done`. Détail : `docs/architecture.md`.
+
+**Déploiement managé** : les runs non attended résolvent le connecteur côté
+service account du worker — il faut un credential `atlassian` au scope
+**workspace** (Studio > Connectors > atlassian > Credentials). En local
+(`mistral dev`), ton credential utilisateur suffit.
+
 ## Points clés
 
 - **Durabilité** : chaque activité est enregistrée ; un worker qui crashe reprend
@@ -93,14 +128,17 @@ apps/worker/src/worker/
 ├── workflows/spec_to_tests.py   # orchestrateur durable
 ├── activities/
 │   ├── git_tools.py             # worktree, commit, merge
-│   ├── test_runner.py           # quality gate bloquante
-│   └── approval.py              # gate humaine (signal)
+│   ├── jira_tools.py            # connecteur MCP atlassian (slot + activités JIRA)
+│   ├── test_runner.py           # run_tests + gates humaines (approval)
+│   └── agent_runner.py         # boucle agent (LLM + tools)
 └── agents/
     ├── definitions.py           # spec/planner/dev/tester (Agents SDK)
     └── run_agent.py             # boucle Runner + tools
 
 docs/architecture.md
-scripts/run.py
+scripts/run.py                 # lance une exécution (--repo ..., --jira CLE)
+scripts/jira.py                # recherche/lecture de tickets JIRA (connecteur atlassian)
+tests/test_jira_tools.py       # tests de l'intégration JIRA
 ```
 
 ## Références

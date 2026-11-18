@@ -9,6 +9,10 @@ Entrées :
                « MR <iid> » (ex. "repars de la MR 1585 : ...") pour compléter une
                MR en cours : sa branche source devient la base de travail et le
                push final la met à jour (la MR n'est pas recréée ni supprimée).
+    jira_issue : clé d'un ticket JIRA (ex. "TOOLLIVE-3600"), lu via le connecteur
+               MCP `atlassian` (@uses_connectors + activities/jira_tools.py) : le
+               contenu du ticket alimente la demande, le ticket reçoit les
+               commentaires de progression et les transitions de statut.
 
 Gates humaines : le workflow enregistre deux signaux `approve` / `reject`
 (scripts/approve.py <execution_id> approve|reject) et dort sur
@@ -22,6 +26,7 @@ from datetime import timedelta
 
 import mistralai.workflows as workflows
 from mistralai.workflows import workflow as wf
+from mistralai.workflows.plugins.mistralai.connectors import uses_connectors
 
 from worker.agents.definitions import (
     MAX_DEV_ITERATIONS,
@@ -31,7 +36,8 @@ from worker.agents.definitions import (
 )
 
 with wf.unsafe.imports_passed_through():
-    from worker.activities import agent_runner, git_tools, test_runner
+    from worker.activities import agent_runner, git_tools, jira_tools, test_runner
+    from worker.activities.jira_tools import atlassian_connector
 
 GATE_TIMEOUT = timedelta(hours=24)
 
@@ -81,6 +87,7 @@ def _extract_json(text: str):
                           "dev parallèle en worktrees, boucle tests bornée, "
                           "fusions, Merge Request.",
 )
+@uses_connectors(atlassian_connector)
 class SpecToTests:
 
     def __init__(self) -> None:
@@ -144,13 +151,59 @@ class SpecToTests:
                              if m.get("role") == "human")
         return "", feedback
 
+    async def _gate(self, subject: str, payload: str, execution_id: str,
+                    jira_key: str) -> None:
+        """Notification humaine (webhook open_approval) + commentaire JIRA sur le
+        ticket lié s'il y en a un."""
+        await test_runner.open_approval(subject=subject, payload=payload,
+                                        execution_id=execution_id)
+        if jira_key:
+            await jira_tools.jira_comment(jira_key, f"🔔 *{subject}*\n\n{payload[:2000]}")
+
+    async def _jira_note(self, jira_key: str, text: str) -> None:
+        """Commentaire JIRA de progression (no-op sans ticket lié)."""
+        if jira_key:
+            await jira_tools.jira_comment(jira_key, text)
+
     @workflows.workflow.entrypoint
-    async def run(self, repo: str, request: str) -> dict:
+    async def run(self, repo: str, request: str, jira_issue: str = "") -> dict:
         # ------------------------------------------------------------------
         # 0. WORKSPACE — URL (GitLab/GitHub) -> clone local ; sinon chemin local
         ws = await git_tools.ensure_workspace(repo)
         repo, repo_url = ws["path"], ws["url"]
         execution_id = workflows.get_execution_id()
+
+        # ------------------------------------------------------------------
+        # 0b. TICKET JIRA (optionnel) — lu via le connecteur MCP `atlassian` :
+        #     le contenu du ticket (description + commentaires) devient le
+        #     contexte de la demande, le ticket passe en transition de démarrage
+        #     et un commentaire annonce l'execution_id + les commandes humaines.
+        jira_key = (jira_issue or "").strip()
+        if jira_key:
+            issue = await jira_tools.fetch_jira_issue(jira_key)
+            comments_txt = "\n".join(
+                f"- {c['author'] or '?'}: {c['body'][:500]}" for c in issue["comments"][-10:])
+            ticket_block = (
+                f"[Ticket JIRA {issue['key']} — {issue['summary']}] {issue['url']}\n"
+                f"Statut: {issue['status']} | Type: {issue['issuetype']} | "
+                f"Priorité: {issue['priority']} | Labels: {', '.join(issue['labels']) or '-'} | "
+                f"Assigné: {issue['assignee'] or '-'}\n\n"
+                f"Description du ticket :\n{issue['description'] or '(vide)'}"
+                + (f"\n\nCommentaires existants :\n{comments_txt}" if comments_txt else ""))
+            request = f"{ticket_block}\n\nDemande initiale :\n{request}"
+            start = await jira_tools.jira_transition_start(jira_key)
+            start_note = (f"Statut passé à « {start.get('to') or start.get('transition')} »."
+                          if start.get("ok")
+                          else f"Transition de démarrage non appliquée "
+                               f"({start.get('reason') or start.get('error', 'inconnue')}).")
+            await jira_tools.jira_comment(
+                jira_key,
+                f"🤖 Pipeline `spec-to-tests` démarré sur {issue['key']} — {issue['summary']}"
+                f" (exécution `{execution_id}`, repo `{repo_url or repo}`)\n{start_note}\n"
+                f"Suivi : `python scripts/status.py {execution_id}` — gates : "
+                f"`python scripts/approve.py {execution_id} approve|reject` — réponses à "
+                f"l'agent spec : `python scripts/talk.py {execution_id} \"...\"`",
+            )
 
         # Mode « reprendre une MR en cours » : la demande contient « MR <iid> »
         # (ex. "repars de la MR 1585 : ...") -> on fetch la branche source de la MR
@@ -191,14 +244,14 @@ class SpecToTests:
             if not question and not cid:
                 empty_rounds += 1
                 if empty_rounds >= MAX_EMPTY_SPEC_ROUNDS:
-                    await test_runner.open_approval(
+                    await self._gate(
                         subject="Interview spec sans progression",
                         payload=(f"L'agent spec n'a ni posé de question ni renvoyé de CHANGE_ID "
                                  f"depuis {MAX_EMPTY_SPEC_ROUNDS} tours (réponses vides) — "
                                  f"le workflow va échouer (escalade).\n"
                                  f"Transcript : python scripts/status.py {execution_id}\n"
                                  f"Arrêter proprement : python scripts/approve.py {execution_id} reject"),
-                        execution_id=execution_id,
+                        execution_id=execution_id, jira_key=jira_key,
                     )
                     raise RuntimeError(
                         f"interview spec sans progression depuis {MAX_EMPTY_SPEC_ROUNDS} "
@@ -208,13 +261,13 @@ class SpecToTests:
             if question and not cid:
                 self.pending_question = question
                 self.conversation.append({"role": "agent", "text": question})
-                await test_runner.open_approval(
+                await self._gate(
                     subject=f"Question de l'agent spec (tour {round_no})",
                     payload=(f"{question}\n\nRéponds à l'agent : python scripts/talk.py "
                              f"{execution_id} \"ta réponse\"\nForcer la finalisation : "
                              f"python scripts/approve.py {execution_id} approve\n"
                              f"Voir le transcript : python scripts/status.py {execution_id}"),
-                    execution_id=execution_id,
+                    execution_id=execution_id, jira_key=jira_key,
                 )
                 consumed = self.replies
                 try:
@@ -222,18 +275,24 @@ class SpecToTests:
                         lambda: self.replies > consumed or self.verdict is not None,
                         timeout=GATE_TIMEOUT)
                 except asyncio.TimeoutError:
-                    await test_runner.open_approval(
+                    await self._gate(
                         subject=f"Interview spec sans réponse depuis 24h (tour {round_no})",
                         payload=(f"Aucune réponse reçue sur la question en attente.\n"
                                  f"Transcript : python scripts/status.py {execution_id}\n"
                                  f"Répondre à l'agent : python scripts/talk.py {execution_id} \"...\"\n"
                                  f"Arrêter : python scripts/approve.py {execution_id} reject"),
-                        execution_id=execution_id,
+                        execution_id=execution_id, jira_key=jira_key,
                     )
-                    return {"status": "timeout_spec_interview",
+                    await self._jira_note(
+                        jira_key,
+                        f"⏳ Interview spec sans réponse depuis 24h — exécution `{execution_id}` "
+                        f"en pause (transcript : `python scripts/status.py {execution_id}`).")
+                    return {"status": "timeout_spec_interview", "jira_issue": jira_key or None,
                             "conversation": self.conversation}
                 if self.verdict == "reject":
-                    return {"status": "rejected_at_spec", "change_id": None}
+                    await self._jira_note(jira_key, "❌ Run rejeté pendant l'interview spec.")
+                    return {"status": "rejected_at_spec", "change_id": None,
+                            "jira_issue": jira_key or None}
                 if self.verdict == "approve":
                     # l'humain veut finaliser sans attendre la fin de l'interview
                     self.verdict = None
@@ -249,15 +308,19 @@ class SpecToTests:
         # ------------------------------------------------------------------
         # 2. GATE HUMAINE — l'humain relit proposal.md + specs/
         self.phase = "gate_spec"
-        await test_runner.open_approval(
+        await self._gate(
             subject=f"Spec à valider: {change_id}",
             payload=f"Spec à valider : {repo}/SPEC.md — réponds "
                     f"`approve` ou `reject` (python scripts/approve.py {execution_id} "
                     f"approve|reject) ; transcript : python scripts/status.py {execution_id}",
-            execution_id=execution_id,
+            execution_id=execution_id, jira_key=jira_key,
         )
         if await self._wait_verdict() != "approve":
-            return {"status": "rejected_at_spec", "change_id": change_id}
+            await self._jira_note(
+                jira_key,
+                f"❌ SPEC.md rejetée à la gate de validation (change_id `{change_id}`).")
+            return {"status": "rejected_at_spec", "change_id": change_id,
+                    "jira_issue": jira_key or None}
 
         # ------------------------------------------------------------------
         # 3. AGENT PLANNER — tasks.md -> tâches unitaires avec dépendances
@@ -347,27 +410,49 @@ class SpecToTests:
         push_target = ((await git_tools.current_branch(repo))["branch"] if repo_url
                        else release_branch)
         review_link = (mr["mr"] or {}).get("web_url") or f"{repo} (diff vs {base})"
+        if jira_key:
+            rev = await jira_tools.jira_transition_review(jira_key)
+            rev_note = (f" Statut passé à « {rev.get('to') or rev.get('transition')} »."
+                        if rev.get("ok") else "")
+            await jira_tools.jira_comment(
+                jira_key,
+                f"📦 MR ouverte pour review : {review_link} (branche `{push_target}`, "
+                f"change_id `{change_id}`){rev_note}")
 
         # ------------------------------------------------------------------
         # 6. GATE REVIEW — un signal `reply` = retour de review : le pipeline
         #    corrige la branche, re-push la MR et redemande (MAX_REVIEW_ROUNDS max).
         for review_round in range(MAX_REVIEW_ROUNDS):
-            await test_runner.open_approval(
+            await self._gate(
                 subject=(f"Review finale: {change_id} — MR: {review_link}"
                          + (f" (tour {review_round + 1})" if review_round else "")),
                 payload=(f"{review_link}\n\n{diff['diff'][:2000]}\n\nTests:\n{final['log'][:1500]}"
                          f"\n\n`approve` = validé, `reject` = rejeté, tout autre message (`reply`) "
                          f"= retour de review traité par le pipeline (correction + re-push)."),
-                execution_id=execution_id,
+                execution_id=execution_id, jira_key=jira_key,
             )
             consumed = len(self.conversation)
             verdict, feedback = await self._wait_review_verdict(consumed)
             if verdict == "approve":
                 self.phase = "done"
+                if jira_key:
+                    done = await jira_tools.jira_transition_done(jira_key)
+                    done_note = (f" Statut passé à « {done.get('to') or done.get('transition')} »."
+                                 if done.get("ok") else "")
+                    await jira_tools.jira_comment(
+                        jira_key,
+                        f"✅ Review approuvée — MR : {(mr.get('mr') or {}).get('web_url')}"
+                        f"{done_note} (merge manuel sur le forge).")
                 return {"status": "mr_opened", "change_id": change_id,
+                        "jira_issue": jira_key or None,
                         "mr": (mr.get("mr") or {}).get("web_url"), "tests": final}
             if verdict == "reject" or not feedback:
+                await self._jira_note(
+                    jira_key,
+                    f"❌ Review rejetée — MR : {(mr['mr'] or {}).get('web_url')} "
+                    f"(change_id `{change_id}`).")
                 return {"status": "rejected_at_review", "change_id": change_id,
+                        "jira_issue": jira_key or None,
                         "mr": (mr["mr"] or {}).get("web_url")}
             # retour de review (`reply`) -> correctif sur la branche MR, puis re-push
             self.phase = "review_fix"
@@ -384,7 +469,12 @@ class SpecToTests:
         # 7. ESCALADE — pas de merge automatique de la MR (l'auto-merge échouait en
         # HTTP 405 côté forge) : la MR reste ouverte, merge manuel après review.
         self.phase = "done"
+        await self._jira_note(
+            jira_key,
+            f"⚠️ {MAX_REVIEW_ROUNDS} tours de review atteints sans approbation — MR : "
+            f"{(mr.get('mr') or {}).get('web_url')} (escalade humaine).")
         return {"status": "mr_updated" if mr_info else "mr_opened", "change_id": change_id,
+                "jira_issue": jira_key or None,
                 "mr": (mr.get("mr") or {}).get("web_url"), "tests": final}
 
     # ---------------------------------------------------------------- boucle
