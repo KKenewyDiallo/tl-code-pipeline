@@ -108,8 +108,10 @@ notification via `open_approval` (webhook `approval_webhook_url`).
   d'outils passent par la gateway du connecteur, qui résout côté serveur le
   credential épinglé par `credentials_name` si `jira_credentials_name` est
   défini, sinon le credential par défaut du caller (user, puis workspace, puis
-  organisation). Nom du connecteur : env `jira_connector_name` (défaut
-  `atlassian` ; le nom Studio peut être suffixé, ex. `atlassian_47af`).
+  organisation). Nom/ID du connecteur : env `jira_connector_name` (défaut
+  `01a1ef49-c29a-73e1-a6b8-17310e9de9a7` = connecteur workspace `atlassian_94e0`,
+  serveur `https://mcp.atlassian.com/v2/mcp`, auth au niveau du connecteur donc
+  utilisable par le service account d'un déploiement managé).
   Quand aucun credential n'est utilisable sous l'identité du run (connecteur
   OAuth user-only en déploiement managé), l'appel d'outil renvoie 401
   « Authentication failed against MCP server while calling tool » (exécution
@@ -124,7 +126,7 @@ notification via `open_approval` (webhook `approval_webhook_url`).
   (défaut « code-review »), `jira_transition_done` (défaut vide = aucune),
   `jira_credentials_name` (nom du credential épinglé par le slot connecteur ;
   vide par défaut = credential par défaut du caller), `jira_connector_name`
-  (nom du connecteur MCP, défaut `atlassian`).
+  (ID/nom du connecteur MCP, défaut `01a1ef49-…` = `atlassian_94e0`).
 - `scripts/jira.py` = recherche/lecture de tickets côté client (ton credential :
   `python scripts/jira.py 'project = TOOLLIVE AND created >= -14d ORDER BY created DESC'`).
 - Tests : `uv run --with pytest python -m pytest tests/ -q`.
