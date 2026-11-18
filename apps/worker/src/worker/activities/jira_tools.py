@@ -174,13 +174,29 @@ def _blocks_text(dumped: Any) -> str:
     return "\n".join(parts)
 
 
+def _unwrap_data_envelope(parsed: Any) -> Any:
+    """Développe l'enveloppe `{"data": ...}` du serveur MCP v2 d'Atlassian
+    (mcp.atlassian.com/v2/mcp) : getJiraIssue y renvoie le ticket sous
+    `{"data": {"appliedContentFormat": ..., "id": ..., "key": ..., "fields": ...}}`
+    (cas prod exécution `0138f8a4...a2a9c` / run `01a1effa-ca7a-773e-ada1-335119a7aae7` où le
+    ticket TOOLLIVE-3601 était bien présent mais déclaré « introuvable » car `key` n'était
+    pas au premier niveau). On ne développe que quand `data` est la seule clé,
+    pour ne jamais déballer un payload d'erreur (`errorMessages`, `error`, ...)."""
+    if (isinstance(parsed, dict) and set(parsed) == {"data"}
+            and isinstance(parsed["data"], (dict, list))):
+        return parsed["data"]
+    return parsed
+
+
 def _parse_tool_result(dumped: Any) -> Any:
-    """Résultat d'un call_tool : JSON parsé si le texte est du JSON, sinon texte brut."""
+    """Résultat d'un call_tool : JSON parsé (enveloppe `data` développée) si le
+    texte est du JSON, sinon texte brut."""
     text = _blocks_text(dumped)
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
     except (json.JSONDecodeError, TypeError):
         return text
+    return _unwrap_data_envelope(parsed)
 
 
 # Le serveur MCP v2 d'Atlassian (mcp.atlassian.com/v2/mcp — ex. connecteur custom
