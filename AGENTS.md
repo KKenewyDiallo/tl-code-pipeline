@@ -106,13 +106,25 @@ notification via `open_approval` (webhook `approval_webhook_url`).
   première activité (exécution `0138f8a4...860559` / run
   `01a1eef1-1481-701a-bf52-fead246a72ec`). Avec `auto_auth=False`, les appels
   d'outils passent par la gateway du connecteur, qui résout côté serveur le
-  credential workspace épinglé par `credentials_name`.
+  credential épinglé par `credentials_name` si `jira_credentials_name` est
+  défini, sinon le credential par défaut du caller (user, puis workspace, puis
+  organisation). Nom du connecteur : env `jira_connector_name` (défaut
+  `atlassian` ; le nom Studio peut être suffixé, ex. `atlassian_47af`).
+  Quand aucun credential n'est utilisable sous l'identité du run (connecteur
+  OAuth user-only en déploiement managé), l'appel d'outil renvoie 401
+  « Authentication failed against MCP server while calling tool » (exécution
+  `0138f8a4...66ea` / run `01a1ef07-2634-701c-9223-1320f1e38a36`) :
+  `fetch_jira_issue` retourne alors `{"ok": False, "reason":
+  "connector_unavailable"}` et le run continue sans le ticket — JIRA ne doit
+  jamais tuer le pipeline (commentaires/transitions déjà non bloquants) ; un
+  ticket introuvable (mauvaise clé) reste fatal.
 - Env (minuscules, fallback majuscules) : `jira_base_url` (défaut
   `https://toollive.atlassian.net/jira`), `jira_cloud_id` (UUID ou host du site),
   `jira_transition_start` (défaut « In Progress »), `jira_transition_review`
   (défaut « code-review »), `jira_transition_done` (défaut vide = aucune),
-  `jira_credentials_name` (nom du credential épinglé par le slot connecteur,
-  défaut `atlassian`).
+  `jira_credentials_name` (nom du credential épinglé par le slot connecteur ;
+  vide par défaut = credential par défaut du caller), `jira_connector_name`
+  (nom du connecteur MCP, défaut `atlassian`).
 - `scripts/jira.py` = recherche/lecture de tickets côté client (ton credential :
   `python scripts/jira.py 'project = TOOLLIVE AND created >= -14d ORDER BY created DESC'`).
 - Tests : `uv run --with pytest python -m pytest tests/ -q`.

@@ -19,13 +19,16 @@ import worker.activities.jira_tools as jt
 class StubClient:
     """ToolCallClient stub : réponses prédéfinies par tool, appels enregistrés."""
 
-    def __init__(self, responses, fail_on=()):
+    def __init__(self, responses, fail_on=(), errors=None):
         self.responses = responses
         self.fail_on = set(fail_on)
+        self.errors = errors or {}
         self.calls: list[tuple[str, dict]] = []
 
     async def call_tool(self, tool_name, arguments=None):
         self.calls.append((tool_name, arguments or {}))
+        if tool_name in self.errors:
+            raise self.errors[tool_name]
         if tool_name in self.fail_on:
             raise RuntimeError(f"boom {tool_name}")
         payload = self.responses[tool_name]
@@ -121,6 +124,45 @@ def test_fetch_issue_not_found_raises():
         asyncio.run(jt._fetch_issue(stub, "NOPE-1"))
 
 
+class FakeGatewayError(Exception):
+    """Simule une SDKError de la gateway connecteurs (status_code + body)."""
+
+    def __init__(self, message, status_code=None):
+        super().__init__(message)
+        if status_code is not None:
+            self.status_code = status_code
+
+
+def test_fetch_issue_soft_when_connector_unavailable_401():
+    stub = StubClient({}, errors={"getJiraIssue": FakeGatewayError(
+        'API error occurred: Status 401. Body: {"detail":"Authentication failed against '
+        'MCP server while calling tool"}', status_code=401)})
+    out = asyncio.run(jt._fetch_issue_or_unavailable(stub, "TOOLLIVE-3600"))
+    assert out["ok"] is False
+    assert out["reason"] == "connector_unavailable"
+    assert "401" in out["error"]
+
+
+def test_fetch_issue_soft_on_gateway_hint_without_status():
+    stub = StubClient({}, errors={"getJiraIssue": FakeGatewayError(
+        "The connector has no connection this caller can use")})
+    out = asyncio.run(jt._fetch_issue_or_unavailable(stub, "TOOLLIVE-3600"))
+    assert out["ok"] is False and out["reason"] == "connector_unavailable"
+
+
+def test_fetch_issue_or_unavailable_still_raises_on_bad_key():
+    stub = StubClient({"getJiraIssue": {"errorMessages": ["Issue does not exist"]}})
+    with pytest.raises(RuntimeError, match="introuvable"):
+        asyncio.run(jt._fetch_issue_or_unavailable(stub, "NOPE-1"))
+
+
+def test_fetch_issue_or_unavailable_raises_on_other_errors():
+    stub = StubClient({}, errors={"getJiraIssue": FakeGatewayError(
+        "API error occurred: Status 500", status_code=500)})
+    with pytest.raises(FakeGatewayError):
+        asyncio.run(jt._fetch_issue_or_unavailable(stub, "TOOLLIVE-3600"))
+
+
 def test_comment_ok_and_non_blocking_error():
     stub = StubClient({"addCommentToJiraIssue": {"id": "1"}})
     out = asyncio.run(jt._comment(stub, "TOOLLIVE-3600", "hello"))
@@ -162,14 +204,17 @@ def test_workflow_declares_atlassian_slot():
     assert "atlassian" in json.dumps(meta)
 
 
-def test_atlassian_slot_pinned_for_managed_runs(monkeypatch):
-    monkeypatch.delenv("jira_credentials_name", raising=False)
-    monkeypatch.delenv("JIRA_CREDENTIALS_NAME", raising=False)
+def test_atlassian_slot_configured_for_managed_runs(monkeypatch):
+    for var in ("jira_connector_name", "JIRA_CONNECTOR_NAME",
+                "jira_credentials_name", "JIRA_CREDENTIALS_NAME"):
+        monkeypatch.delenv(var, raising=False)
     slot = jt._build_atlassian_connector()
     assert slot.connector_name == "atlassian"
     assert slot.run_as.value == "deployment"
     assert slot.auto_auth is False
-    assert slot.credentials_name == "atlassian"
+    assert slot.credentials_name is None
+    monkeypatch.setenv("jira_connector_name", "atlassian_47af")
+    assert jt._build_atlassian_connector().connector_name == "atlassian_47af"
     monkeypatch.setenv("jira_credentials_name", "jira-bot")
     assert jt._build_atlassian_connector().credentials_name == "jira-bot"
     monkeypatch.setenv("JIRA_CREDENTIALS_NAME", "jira-bot-legacy")

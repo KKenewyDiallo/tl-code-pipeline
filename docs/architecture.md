@@ -86,8 +86,9 @@ langage naturel.
 ## Intégration JIRA (connecteur MCP `atlassian`)
 
 Le workflow `spec-to-tests` déclare le slot
-`connector("atlassian", run_as="deployment", auto_auth=False, credentials_name=...)`
-(`activities/jira_tools.py::atlassian_connector`) et l'attache via
+`connector(<jira_connector_name>, run_as="deployment", auto_auth=False, ...)`
+(`activities/jira_tools.py::atlassian_connector`, nom du connecteur par défaut
+`atlassian` — le nom Studio peut être suffixé, ex. `atlassian_47af`) et l'attache via
 `@uses_connectors(atlassian_connector)` (placé après `@workflow.define`).
 Aucun credential dans le code : la plateforme résout les credentials au runtime
 selon l'identité du run — credential **utilisateur** en local (`mistral dev`) ;
@@ -101,8 +102,15 @@ service account d'un déploiement managé et fait échouer l'exécution entière
 (exécution `0138f8a4...860559`, run `01a1eef1-1481-701a-bf52-fead246a72ec`,
 2026-11-18T13:55Z). Les appels d'outils passent alors directement par la
 gateway du connecteur (`POST /v1/connectors/<id>/tools/<tool>/call`), qui
-résout côté serveur le credential workspace épinglé par `credentials_name`
-(env `jira_credentials_name`, défaut `atlassian`).
+résout côté serveur le credential épinglé par `credentials_name`
+(env `jira_credentials_name`, si défini) ou, à défaut, le credential par
+défaut du caller (user, puis workspace, puis organisation). Quand aucun
+credential n'est utilisable sous l'identité du run (connecteur OAuth user-only
+en déploiement managé), l'appel d'outil renvoie 401 « Authentication failed
+against MCP server while calling tool » (exécution `0138f8a4...66ea`, run
+`01a1ef07-2634-701c-9223-1320f1e38a36`) : `fetch_jira_issue` retourne
+`{"ok": False, "reason": "connector_unavailable"}` et le run continue sans le
+ticket (JIRA ne tue jamais le pipeline ; ticket introuvable = erreur fatale).
 
 Entrée : `jira_issue` (ex. `TOOLLIVE-3600`), passée par
 `python scripts/run.py "..." --repo c8y --jira TOOLLIVE-3600`.
@@ -112,7 +120,9 @@ Déroulement quand un ticket est lié :
 1. `fetch_jira_issue` (`getJiraIssue`, champs summary/description/status/.../comment,
    `responseContentFormat=markdown`) — le contenu du ticket (description +
    commentaires) est prépendu à la demande de l'agent spec. Échoue fort si le
-   ticket est introuvable (mauvaise clé en entrée).
+   ticket est introuvable (mauvaise clé en entrée) ; si le connecteur est
+   indisponible sous l'identité du run (401/403), retourne `{"ok": False, ...}`
+   et le pipeline continue sans le ticket.
 2. `jira_transition_start` (env `jira_transition_start`, défaut « In Progress »)
    + commentaire de démarrage avec l'`execution_id` et les commandes humaines
    (`scripts/status.py|approve.py|talk.py`).
@@ -336,7 +346,8 @@ en majuscules, nom réservé injecté par le runtime managé.
 | `jira_transition_start` | transition JIRA au démarrage du run sur le ticket (défaut `In Progress`) |
 | `jira_transition_review` | transition à l'ouverture de la MR (défaut `code-review`) |
 | `jira_transition_done` | transition finale après approbation (défaut vide = aucune ; merge manuel) |
-| `jira_credentials_name` | nom du credential épinglé par le slot connecteur `atlassian` (défaut `atlassian`, requis au scope workspace pour un déploiement managé) |
+| `jira_connector_name` | nom du connecteur MCP JIRA (défaut `atlassian` ; le nom Studio peut être suffixé, ex. `atlassian_47af`) |
+| `jira_credentials_name` | nom du credential épinglé par le slot connecteur (vide par défaut = credential par défaut du caller : user, puis workspace, puis organisation) |
 
 ## Points à brancher (TODO restants)
 

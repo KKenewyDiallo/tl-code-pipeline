@@ -6,8 +6,9 @@ Usage :
     python scripts/jira.py --max 50 'created >= -7d ORDER BY created DESC'
 
 Le script tourne sous TON identité avec TON credential du connecteur
-`atlassian` (Studio > Connectors — l'authentification se fait dans le navigateur
-au premier usage). cloudId : env `jira_cloud_id`, sinon le host de
+(`jira_connector_name`, défaut `atlassian` — le nom Studio peut être suffixé,
+ex. `atlassian_47af` ; Studio > Connectors, l'authentification se fait dans le
+navigateur au premier usage). cloudId : env `jira_cloud_id`, sinon le host de
 `jira_base_url` (défaut https://toollive.atlassian.net/jira).
 
 Note : JIRA refuse les JQL « unbounded » — la requête doit contenir une
@@ -22,6 +23,11 @@ import urllib.parse
 from mistralai.client import Mistral
 
 DEFAULT_JIRA_BASE_URL = "https://toollive.atlassian.net/jira"
+
+
+def _connector_name() -> str:
+    return (os.environ.get("jira_connector_name") or os.environ.get("JIRA_CONNECTOR_NAME")
+            or "atlassian")
 
 
 def _cloud_id() -> str:
@@ -56,7 +62,7 @@ def main() -> None:
 
     if args.issue:
         res = client.beta.connectors.call_tool(
-            connector_id_or_name="atlassian",
+            connector_id_or_name=_connector_name(),
             tool_name="getJiraIssue",
             arguments={"cloudId": _cloud_id(), "issueIdOrKey": args.issue,
                        "fields": ["summary", "description", "status", "issuetype",

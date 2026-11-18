@@ -181,29 +181,39 @@ class SpecToTests:
         jira_key = (jira_issue or "").strip()
         if jira_key:
             issue = await jira_tools.fetch_jira_issue(jira_key)
-            comments_txt = "\n".join(
-                f"- {c['author'] or '?'}: {c['body'][:500]}" for c in issue["comments"][-10:])
-            ticket_block = (
-                f"[Ticket JIRA {issue['key']} — {issue['summary']}] {issue['url']}\n"
-                f"Statut: {issue['status']} | Type: {issue['issuetype']} | "
-                f"Priorité: {issue['priority']} | Labels: {', '.join(issue['labels']) or '-'} | "
-                f"Assigné: {issue['assignee'] or '-'}\n\n"
-                f"Description du ticket :\n{issue['description'] or '(vide)'}"
-                + (f"\n\nCommentaires existants :\n{comments_txt}" if comments_txt else ""))
-            request = f"{ticket_block}\n\nDemande initiale :\n{request}"
-            start = await jira_tools.jira_transition_start(jira_key)
-            start_note = (f"Statut passé à « {start.get('to') or start.get('transition')} »."
-                          if start.get("ok")
-                          else f"Transition de démarrage non appliquée "
-                               f"({start.get('reason') or start.get('error', 'inconnue')}).")
-            await jira_tools.jira_comment(
-                jira_key,
-                f"🤖 Pipeline `spec-to-tests` démarré sur {issue['key']} — {issue['summary']}"
-                f" (exécution `{execution_id}`, repo `{repo_url or repo}`)\n{start_note}\n"
-                f"Suivi : `python scripts/status.py {execution_id}` — gates : "
-                f"`python scripts/approve.py {execution_id} approve|reject` — réponses à "
-                f"l'agent spec : `python scripts/talk.py {execution_id} \"...\"`",
-            )
+            if issue.get("ok") is False:
+                # Connecteur indisponible sous l'identité du run (ex. déploiement
+                # managé sans credential workspace sur un connecteur OAuth user-only,
+                # 401 « Authentication failed against MCP server ») : le pipeline
+                # continue sans le contenu du ticket ; commentaires et transitions
+                # JIRA sont de toute façon non bloquants.
+                request = (f"[Ticket JIRA {jira_key} illisible sous l'identité du run : "
+                           f"{issue.get('error') or issue.get('reason')}]\n\n"
+                           f"Demande initiale :\n{request}")
+            else:
+                comments_txt = "\n".join(
+                    f"- {c['author'] or '?'}: {c['body'][:500]}" for c in issue["comments"][-10:])
+                ticket_block = (
+                    f"[Ticket JIRA {issue['key']} — {issue['summary']}] {issue['url']}\n"
+                    f"Statut: {issue['status']} | Type: {issue['issuetype']} | "
+                    f"Priorité: {issue['priority']} | Labels: {', '.join(issue['labels']) or '-'} | "
+                    f"Assigné: {issue['assignee'] or '-'}\n\n"
+                    f"Description du ticket :\n{issue['description'] or '(vide)'}"
+                    + (f"\n\nCommentaires existants :\n{comments_txt}" if comments_txt else ""))
+                request = f"{ticket_block}\n\nDemande initiale :\n{request}"
+                start = await jira_tools.jira_transition_start(jira_key)
+                start_note = (f"Statut passé à « {start.get('to') or start.get('transition')} »."
+                              if start.get("ok")
+                              else f"Transition de démarrage non appliquée "
+                                   f"({start.get('reason') or start.get('error', 'inconnue')}).")
+                await jira_tools.jira_comment(
+                    jira_key,
+                    f"🤖 Pipeline `spec-to-tests` démarré sur {issue['key']} — {issue['summary']}"
+                    f" (exécution `{execution_id}`, repo `{repo_url or repo}`)\n{start_note}\n"
+                    f"Suivi : `python scripts/status.py {execution_id}` — gates : "
+                    f"`python scripts/approve.py {execution_id} approve|reject` — réponses à "
+                    f"l'agent spec : `python scripts/talk.py {execution_id} \"...\"`",
+                )
 
         # Mode « reprendre une MR en cours » : la demande contient « MR <iid> »
         # (ex. "repars de la MR 1585 : ...") -> on fetch la branche source de la MR
