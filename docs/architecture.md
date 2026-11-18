@@ -31,13 +31,16 @@ apps/worker/src/worker/
 ├── workflows/spec_to_tests.py   # orchestrateur durable "spec-to-tests" (6 étapes)
 ├── activities/
 │   ├── git_tools.py             # worktree add/remove, commit, merge séquentiel, diff
+│   ├── jira_tools.py            # connecteur MCP atlassian (slot + activités JIRA)
 │   ├── test_runner.py           # run_tests (quality gate) + gates humaines (approval)
 └── agents/
     ├── definitions.py           # spec / planner / dev / tester / reviewer + bornes
     ├── run_agent.py             # boucle modèle → tools, bornée à MAX_AGENT_TURNS
     └── tools.py                 # shell/fichiers confinés au worktree (safe_path)
 
-scripts/run.py                   # déclenche une exécution (--repo c8y|micro|<chemin>)
+scripts/run.py                   # déclenche une exécution (--repo c8y|micro|<chemin>, --jira CLE)
+scripts/jira.py                  # recherche/lecture de tickets JIRA (connecteur atlassian)
+tests/test_jira_tools.py         # tests de l'intégration JIRA
 docs/architecture.md             # ce document
 ```
 
@@ -79,6 +82,46 @@ langage naturel.
    (`unrunnable`, avec une réinstallation forcée des dépendances tentée une fois) :
    on pousse quand même la branche `release/*` + MR, la CI valide les tests.
 6. **GATE 2** — review du diff cumulé, signal `approve`/`reject`, puis MR laissée ouverte (merge manuel sur GitLab ; l'auto-merge échouait en HTTP 405).
+
+## Intégration JIRA (connecteur MCP `atlassian`)
+
+Le workflow `spec-to-tests` déclare le slot `connector("atlassian")`
+(`activities/jira_tools.py::atlassian_connector`) et l'attache via
+`@uses_connectors(atlassian_connector)` (placé après `@workflow.define`).
+Aucun credential dans le code : la plateforme résout les credentials au runtime
+selon l'identité du run — credential **utilisateur** en local (`mistral dev`) ;
+**credential `atlassian` au scope workspace/organisation requis** pour un
+déploiement managé (runs non attended : le service account du worker ne peut
+pas faire d'OAuth interactif).
+
+Entrée : `jira_issue` (ex. `TOOLLIVE-3600`), passée par
+`python scripts/run.py "..." --repo c8y --jira TOOLLIVE-3600`.
+
+Déroulement quand un ticket est lié :
+
+1. `fetch_jira_issue` (`getJiraIssue`, champs summary/description/status/.../comment,
+   `responseContentFormat=markdown`) — le contenu du ticket (description +
+   commentaires) est prépendu à la demande de l'agent spec. Échoue fort si le
+   ticket est introuvable (mauvaise clé en entrée).
+2. `jira_transition_start` (env `jira_transition_start`, défaut « In Progress »)
+   + commentaire de démarrage avec l'`execution_id` et les commandes humaines
+   (`scripts/status.py|approve.py|talk.py`).
+3. Chaque gate humaine (`_gate`) poste aussi un commentaire JIRA
+   (`addCommentToJiraIssue`, markdown).
+4. À l'ouverture de la MR : `jira_transition_review` (défaut « code-review ») +
+   commentaire avec le lien de la MR.
+5. Sorties du run : commentaire final (approuvé / rejeté / timeout / escalade) +
+   `jira_transition_done` si défini (défaut vide — le merge reste manuel).
+
+Commentaires et transitions sont **non bloquants** (ils retournent
+`{"ok": False, ...}` sans faire échouer le run). Outils MCP utilisés :
+`getJiraIssue`, `searchJiraIssuesUsingJql`, `getTransitionsForJiraIssue`,
+`addCommentToJiraIssue`, `transitionJiraIssue`. `cloudId` = env `jira_cloud_id`
+(UUID ou host du site), sinon le host de `jira_base_url` (défaut
+`https://toollive.atlassian.net/jira`).
+
+Côté client (ton credential utilisateur) : `python scripts/jira.py '<JQL>'`
+recherche des tickets (JQL borné obligatoire), `--issue CLE` affiche le détail.
 
 ## Garanties
 
@@ -278,6 +321,11 @@ en majuscules, nom réservé injecté par le runtime managé.
 | `pipeline_jest_max_workers` | workers Jest max (défaut `2`) — borne mémoire, la RAM du worker n'étant pas réglable |
 | `pipeline_node_max_old_space` | tas V8 Node max en Mo (défaut `2048`) |
 | `DEPLOYMENT_NAME` | nom du déploiement worker (requis au boot ; routage des exécutions) |
+| `jira_base_url` | URL du site Jira (défaut `https://toollive.atlassian.net/jira`) — sert aussi à construire les URL de tickets |
+| `jira_cloud_id` | cloudId Atlassian (UUID ou host du site, ex. `toollive.atlassian.net`) ; sinon host de `jira_base_url` |
+| `jira_transition_start` | transition JIRA au démarrage du run sur le ticket (défaut `In Progress`) |
+| `jira_transition_review` | transition à l'ouverture de la MR (défaut `code-review`) |
+| `jira_transition_done` | transition finale après approbation (défaut vide = aucune ; merge manuel) |
 
 ## Points à brancher (TODO restants)
 

@@ -80,6 +80,31 @@ Gates humaines : signaux `approve`/`reject` sur le workflow
 réponse via `python scripts/approve.py <execution_id> approve|reject` ;
 notification via `open_approval` (webhook `approval_webhook_url`).
 
+## Intégration JIRA (connecteur MCP `atlassian`)
+
+- `python scripts/run.py "..." --repo c8y --jira TOOLLIVE-3600` (input
+  `jira_issue` du workflow `spec-to-tests`) : le ticket est lu via le connecteur
+  MCP `atlassian` — slot `atlassian_connector` déclaré dans
+  `activities/jira_tools.py`, attaché au workflow par `@uses_connectors` (placé
+  APRÈS `@workflow.define`). Activités : `fetch_jira_issue` / `jira_search` /
+  `jira_comment` / `jira_transition(_start|_review|_done)` (tools MCP
+  `getJiraIssue`, `searchJiraIssuesUsingJql`, `getTransitionsForJiraIssue`,
+  `addCommentToJiraIssue`, `transitionJiraIssue`).
+- Le contenu du ticket (description + commentaires) est prépendu à la demande de
+  l'agent spec ; chaque gate est commentée sur le ticket ; à l'ouverture de la
+  MR, transition + commentaire avec le lien MR ; commentaire final en sortie.
+- **Jamais de credential JIRA dans le code, les logs ni une URL** : résolution
+  par la plateforme selon l'identité du run — credential utilisateur en local
+  (`mistral dev`) ; **credential `atlassian` au scope workspace requis** pour
+  les déploiements managés (runs non attended, service account du worker).
+- Env (minuscules, fallback majuscules) : `jira_base_url` (défaut
+  `https://toollive.atlassian.net/jira`), `jira_cloud_id` (UUID ou host du site),
+  `jira_transition_start` (défaut « In Progress »), `jira_transition_review`
+  (défaut « code-review »), `jira_transition_done` (défaut vide = aucune).
+- `scripts/jira.py` = recherche/lecture de tickets côté client (ton credential :
+  `python scripts/jira.py 'project = TOOLLIVE AND created >= -14d ORDER BY created DESC'`).
+- Tests : `uv run --with pytest python -m pytest tests/ -q`.
+
 ## TODO à compléter
 
 - Binder le canal de notification concret (Slack incoming webhook) en secret
