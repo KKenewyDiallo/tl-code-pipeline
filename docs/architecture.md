@@ -87,8 +87,10 @@ langage naturel.
 
 Le workflow `spec-to-tests` déclare le slot
 `connector(<jira_connector_name>, run_as="deployment", auto_auth=False, ...)`
-(`activities/jira_tools.py::atlassian_connector`, nom du connecteur par défaut
-`atlassian` — le nom Studio peut être suffixé, ex. `atlassian_47af`) et l'attache via
+(`activities/jira_tools.py::atlassian_connector`, connecteur par défaut
+`01a1ef49-c29a-73e1-a6b8-17310e9de9a7` = `atlassian_94e0`, serveur
+`https://mcp.atlassian.com/v2/mcp`, auth au niveau du connecteur — utilisable par
+le service account d'un déploiement managé ; surcharge via `jira_connector_name`) et l'attache via
 `@uses_connectors(atlassian_connector)` (placé après `@workflow.define`).
 Aucun credential dans le code : la plateforme résout les credentials au runtime
 selon l'identité du run — credential **utilisateur** en local (`mistral dev`) ;
@@ -136,7 +138,10 @@ Déroulement quand un ticket est lié :
 Commentaires et transitions sont **non bloquants** (ils retournent
 `{"ok": False, ...}` sans faire échouer le run). Outils MCP utilisés :
 `getJiraIssue`, `searchJiraIssuesUsingJql`, `getTransitionsForJiraIssue`,
-`addCommentToJiraIssue`, `transitionJiraIssue`. `cloudId` = env `jira_cloud_id`
+`addCommentToJiraIssue`, `transitionJiraIssue` (sur le serveur v2 ces deux derniers
+sont renommés `listJiraIssueTransitions` / `addOrEditJiraIssueComment`, et
+`transitionJiraIssue` prend `transitionId` — fallbacks gérés dans
+`jira_tools._call` / `_transition`). `cloudId` = env `jira_cloud_id`
 (UUID ou host du site), sinon le host de `jira_base_url` (défaut
 `https://toollive.atlassian.net/jira`).
 
@@ -346,7 +351,7 @@ en majuscules, nom réservé injecté par le runtime managé.
 | `jira_transition_start` | transition JIRA au démarrage du run sur le ticket (défaut `In Progress`) |
 | `jira_transition_review` | transition à l'ouverture de la MR (défaut `code-review`) |
 | `jira_transition_done` | transition finale après approbation (défaut vide = aucune ; merge manuel) |
-| `jira_connector_name` | nom du connecteur MCP JIRA (défaut `atlassian` ; le nom Studio peut être suffixé, ex. `atlassian_47af`) |
+| `jira_connector_name` | ID/nom du connecteur MCP JIRA (défaut `01a1ef49-c29a-73e1-a6b8-17310e9de9a7` = `atlassian_94e0`, serveur mcp.atlassian.com/v2/mcp) |
 | `jira_credentials_name` | nom du credential épinglé par le slot connecteur (vide par défaut = credential par défaut du caller : user, puis workspace, puis organisation) |
 
 ## Points à brancher (TODO restants)

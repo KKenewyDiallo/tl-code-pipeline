@@ -20,8 +20,10 @@ appels d'outils passent par la gateway du connecteur
 (`POST /v1/connectors/<id>/tools/<tool>/call`), qui résout côté serveur le credential
 épinglé par `credentials_name` (env `jira_credentials_name`, si défini) ou, à défaut,
 le credential par défaut du caller (user, puis workspace, puis organisation). Nom du
-connecteur : env `jira_connector_name` (défaut « atlassian » — le nom Studio peut être
-suffixé, ex. `atlassian_47af`).
+connecteur : env `jira_connector_name` (défaut `01a1ef49-c29a-73e1-a6b8-17310e9de9a7`
+= connecteur workspace `atlassian_94e0`, serveur `https://mcp.atlassian.com/v2/mcp`,
+auth configurée au niveau du connecteur — utilisable par le service account d'un
+déploiement managé).
 
 Quand aucun credential n'est utilisable sous l'identité du run (connecteur OAuth
 user-only, ex. déploiement managé sans credential workspace), l'appel d'outil renvoie
@@ -34,6 +36,13 @@ au lieu d'échouer entièrement. Un ticket introuvable (mauvaise clé) reste fat
 Outils MCP utilisés (connecteur Atlassian) :
 - lecture  : getJiraIssue, searchJiraIssuesUsingJql, getTransitionsForJiraIssue
 - écriture : addCommentToJiraIssue, transitionJiraIssue
+
+Sur le serveur MCP v2 (mcp.atlassian.com/v2/mcp — ex. connecteur custom
+`atlassian_94e0`), deux outils sont renommés avec les mêmes arguments :
+getTransitionsForJiraIssue → listJiraIssueTransitions et
+addCommentToJiraIssue → addOrEditJiraIssueComment ; `_call` retombe sur ces noms
+automatiquement. `transitionJiraIssue` v2 prend `transitionId` au lieu de
+`transition={"id": ...}` (fallback géré dans `_transition`).
 
 `cloudId` : env `jira_cloud_id` (UUID ou host du site, ex. `toollive.atlassian.net`),
 sinon le host de `jira_base_url` (défaut https://toollive.atlassian.net/jira).
@@ -54,7 +63,9 @@ from mistralai.workflows import Depends
 from mistralai.workflows.plugins.mistralai.connectors import ConnectorSlot, ToolCallClient, connector
 
 DEFAULT_JIRA_BASE_URL = "https://toollive.atlassian.net/jira"
-DEFAULT_JIRA_CONNECTOR_NAME = "atlassian"
+# Connecteur workspace `atlassian_94e0` (id 01a1ef49-...), serveur
+# https://mcp.atlassian.com/v2/mcp, auth au niveau du connecteur (service account).
+DEFAULT_JIRA_CONNECTOR_NAME = "01a1ef49-c29a-73e1-a6b8-17310e9de9a7"
 
 ISSUE_FIELDS = ["summary", "description", "status", "issuetype", "priority",
                 "labels", "assignee", "reporter", "comment"]
@@ -75,10 +86,10 @@ def _build_atlassian_connector() -> ConnectorSlot:
     """Slot connecteur JIRA pour runs managés non attended : identité service du
     worker (`run_as="deployment"`), preflight auto_auth désactivé (son listing des
     credentials au scope user 404 pour le service account et tue l'exécution).
-    Nom du connecteur : env `jira_connector_name` (défaut « atlassian », le nom Studio
-    peut être suffixé ex. `atlassian_47af`). Credential : épinglé par nom seulement si
-    `jira_credentials_name` est défini, sinon la gateway résout le credential par
-    défaut (user, puis workspace, puis organisation)."""
+    Nom/ID du connecteur : env `jira_connector_name` (défaut `01a1ef49-...` =
+    `atlassian_94e0`, serveur mcp.atlassian.com/v2/mcp). Credential : épinglé par nom
+    seulement si `jira_credentials_name` est défini, sinon la gateway résout le
+    credential par défaut (user, puis workspace, puis organisation)."""
     return connector(
         _env("jira_connector_name", "JIRA_CONNECTOR_NAME") or DEFAULT_JIRA_CONNECTOR_NAME,
         run_as="deployment",
@@ -159,9 +170,37 @@ def _parse_tool_result(dumped: Any) -> Any:
         return text
 
 
+# Le serveur MCP v2 d'Atlassian (mcp.atlassian.com/v2/mcp — ex. connecteur custom
+# `atlassian_94e0`) a renommé deux outils par rapport au connecteur builtin v1,
+# avec les mêmes arguments : getTransitionsForJiraIssue -> listJiraIssueTransitions,
+# addCommentToJiraIssue -> addOrEditJiraIssueComment.
+_TOOL_FALLBACKS = {
+    "getTransitionsForJiraIssue": "listJiraIssueTransitions",
+    "addCommentToJiraIssue": "addOrEditJiraIssueComment",
+}
+
+
+def _is_unknown_tool(exc: BaseException) -> bool:
+    """Vrai si la gateway répond que l'outil demandé n'existe pas sur le connecteur."""
+    if getattr(exc, "status_code", None) == 404 and "tool" in str(exc).lower():
+        return True
+    msg = str(exc).lower()
+    return "tool" in msg and "not found" in msg
+
+
 async def _call(jira: ToolCallClient, tool: str, **arguments: Any) -> Any:
-    """Appelle un outil du connecteur et parse sa réponse (JSON ou texte)."""
-    return _parse_tool_result(await jira.call_tool(tool_name=tool, arguments=arguments))
+    """Appelle un outil du connecteur et parse sa réponse (JSON ou texte). Si le
+    serveur ne connaît pas le nom (v1), essaie le nom de fallback v2."""
+    try:
+        return _parse_tool_result(await jira.call_tool(tool_name=tool, arguments=arguments))
+    except Exception as exc:
+        fallback = _TOOL_FALLBACKS.get(tool)
+        if fallback is None or not _is_unknown_tool(exc):
+            raise
+        try:
+            return _parse_tool_result(await jira.call_tool(tool_name=fallback, arguments=arguments))
+        except Exception as fallback_exc:
+            raise exc from fallback_exc
 
 
 def _brief(issue: dict) -> dict:
@@ -271,16 +310,18 @@ async def _comment(jira: ToolCallClient, issue_key: str, body: str) -> dict:
 
 async def _transition(jira: ToolCallClient, issue_key: str, transition_name: str) -> dict:
     """Transition de statut par NOM (ex. « In Progress », « code-review ») : résout
-    l'id via getTransitionsForJiraIssue puis appelle transitionJiraIssue. Si la
+    l'id via getTransitionsForJiraIssue (v2 : listJiraIssueTransitions) puis appelle
+    transitionJiraIssue (v1 : transition={"id": ...}, v2 : transitionId=...). Si la
     transition n'est pas disponible sur le ticket : {"ok": False, "reason": ...}."""
     if not transition_name:
         return {"ok": False, "reason": "nom de transition vide"}
     try:
         transitions = await _call(jira, "getTransitionsForJiraIssue",
                                   cloudId=cloud_id(), issueIdOrKey=issue_key)
+        items = transitions.get("transitions") if isinstance(transitions, dict) else transitions
         wanted = transition_name.strip().lower()
         match = None
-        for t in (transitions or {}).get("transitions") or []:
+        for t in items or []:
             names = {str(t.get("name", "")).lower(),
                      str((t.get("to") or {}).get("name", "")).lower()}
             if wanted in names:
@@ -289,9 +330,14 @@ async def _transition(jira: ToolCallClient, issue_key: str, transition_name: str
         if not match:
             return {"ok": False,
                     "reason": f"transition {transition_name!r} indisponible sur {issue_key}"}
-        await _call(jira, "transitionJiraIssue",
-                    cloudId=cloud_id(), issueIdOrKey=issue_key,
-                    transition={"id": match["id"]})
+        try:
+            await _call(jira, "transitionJiraIssue",
+                        cloudId=cloud_id(), issueIdOrKey=issue_key,
+                        transition={"id": match["id"]})
+        except Exception:
+            await _call(jira, "transitionJiraIssue",
+                        cloudId=cloud_id(), issueIdOrKey=issue_key,
+                        transitionId=str(match["id"]))
         return {"ok": True, "transition": match.get("name"),
                 "to": (match.get("to") or {}).get("name")}
     except Exception as exc:

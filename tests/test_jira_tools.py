@@ -182,6 +182,57 @@ def test_transition_by_name():
     assert tool == "transitionJiraIssue" and args["transition"] == {"id": "61"}
 
 
+def test_call_falls_back_to_v2_tool_name():
+    stub = StubClient({"listJiraIssueTransitions": TRANSITIONS},
+                      errors={"getTransitionsForJiraIssue": FakeGatewayError(
+                          'Status 404. Body: {"detail":"Tool getTransitionsForJiraIssue not found"}',
+                          status_code=404)})
+    out = asyncio.run(jt._call(stub, "getTransitionsForJiraIssue",
+                               cloudId="toollive.atlassian.net", issueIdOrKey="TOOLLIVE-3600"))
+    assert out == TRANSITIONS
+    assert [c[0] for c in stub.calls] == ["getTransitionsForJiraIssue", "listJiraIssueTransitions"]
+
+
+def test_call_reraises_when_tool_has_no_fallback():
+    stub = StubClient({}, errors={"getJiraIssue": FakeGatewayError(
+        'Status 404. Body: {"detail":"Tool getJiraIssue not found"}', status_code=404)})
+    with pytest.raises(FakeGatewayError):
+        asyncio.run(jt._call(stub, "getJiraIssue", cloudId="x", issueIdOrKey="NOPE-1"))
+    assert [c[0] for c in stub.calls] == ["getJiraIssue"]
+
+
+def test_transition_accepts_bare_list_response():
+    stub = StubClient({"getTransitionsForJiraIssue": TRANSITIONS["transitions"],
+                       "transitionJiraIssue": {}})
+    out = asyncio.run(jt._transition(stub, "TOOLLIVE-3600", "In Progress"))
+    assert out["ok"] is True and out["to"] == "devs-en-cours"
+
+
+def test_transition_falls_back_to_v2_transition_id():
+    class V2Stub(StubClient):
+        def __init__(self):
+            super().__init__({})
+            self.transition_args = []
+
+        async def call_tool(self, tool_name, arguments=None):
+            self.calls.append((tool_name, arguments or {}))
+            if tool_name in ("getTransitionsForJiraIssue", "listJiraIssueTransitions"):
+                return {"content": [{"type": "text", "text": json.dumps(TRANSITIONS)}]}
+            if tool_name == "transitionJiraIssue":
+                self.transition_args.append(arguments or {})
+                if "transition" in (arguments or {}):
+                    raise FakeGatewayError("Status 400 invalid transition payload", status_code=400)
+                return {"content": [{"type": "text", "text": "{}"}]}
+            raise AssertionError(f"unexpected tool {tool_name}")
+
+    stub = V2Stub()
+    out = asyncio.run(jt._transition(stub, "TOOLLIVE-3600", "code-review"))
+    assert out["ok"] is True and out["to"] == "code-review"
+    assert [c[0] for c in stub.calls] == ["getTransitionsForJiraIssue", "transitionJiraIssue",
+                                          "transitionJiraIssue"]
+    assert stub.transition_args[-1]["transitionId"] == "61"
+
+
 def test_transition_unavailable_is_soft():
     stub = StubClient({"getTransitionsForJiraIssue": TRANSITIONS})
     out = asyncio.run(jt._transition(stub, "TOOLLIVE-3600", "Done"))
@@ -201,7 +252,7 @@ def test_search_briefs():
 def test_workflow_declares_atlassian_slot():
     import worker.workflows.spec_to_tests as m
     meta = getattr(m.SpecToTests, "__plugin_metadata__", {})
-    assert "atlassian" in json.dumps(meta)
+    assert jt.DEFAULT_JIRA_CONNECTOR_NAME in json.dumps(meta)
 
 
 def test_atlassian_slot_configured_for_managed_runs(monkeypatch):
@@ -209,7 +260,7 @@ def test_atlassian_slot_configured_for_managed_runs(monkeypatch):
                 "jira_credentials_name", "JIRA_CREDENTIALS_NAME"):
         monkeypatch.delenv(var, raising=False)
     slot = jt._build_atlassian_connector()
-    assert slot.connector_name == "atlassian"
+    assert slot.connector_name == jt.DEFAULT_JIRA_CONNECTOR_NAME == "01a1ef49-c29a-73e1-a6b8-17310e9de9a7"
     assert slot.run_as.value == "deployment"
     assert slot.auto_auth is False
     assert slot.credentials_name is None
