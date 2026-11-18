@@ -305,6 +305,47 @@ def test_call_reraises_when_tool_has_no_fallback():
     assert [c[0] for c in stub.calls] == ["getJiraIssue"]
 
 
+def test_call_falls_back_on_mcp_unknown_tool_content_error():
+    """Cas prod : exécution 0138f8a4...b2363 / run 01a1f00d-42f0-7593-8576-dbf2d3a55e33
+    (2026-11-18T19:06:23Z) — la gateway répond 200 mais le serveur MCP v2 renvoie
+    « Unknown tool: 'getTransitionsForJiraIssue' » DANS le contenu du tool
+    (ConnectorToolCallError, texte dans `details`) : le fallback v2 doit se
+    déclencher (listJiraIssueTransitions)."""
+    unknown = FakeMcpToolError({"content": [
+        {"type": "text", "text": "Unknown tool: 'getTransitionsForJiraIssue'"}]})
+    stub = StubClient({"listJiraIssueTransitions": TRANSITIONS},
+                      errors={"getTransitionsForJiraIssue": unknown})
+    out = asyncio.run(jt._call(stub, "getTransitionsForJiraIssue",
+                               cloudId="toollive.atlassian.net", issueIdOrKey="TOOLLIVE-3601"))
+    assert out == TRANSITIONS
+    assert [c[0] for c in stub.calls] == ["getTransitionsForJiraIssue", "listJiraIssueTransitions"]
+
+
+def test_comment_falls_back_on_mcp_unknown_tool_content_error():
+    """Idem pour addCommentToJiraIssue -> addOrEditJiraIssueComment (même exécution,
+    19:06:25Z) : le commentaire doit être posté via le nom v2."""
+    unknown = FakeMcpToolError({"content": [
+        {"type": "text", "text": "Unknown tool: 'addCommentToJiraIssue'"}]})
+    stub = StubClient({"addOrEditJiraIssueComment": {"id": "1"}},
+                      errors={"addCommentToJiraIssue": unknown})
+    out = asyncio.run(jt._comment(stub, "TOOLLIVE-3601", "hello"))
+    assert out == {"ok": True}
+    assert [c[0] for c in stub.calls] == ["addCommentToJiraIssue", "addOrEditJiraIssueComment"]
+
+
+def test_call_no_fallback_on_other_mcp_content_error():
+    """Une erreur MCP dans le contenu qui n'est PAS « unknown tool » (ex. erreur au
+    niveau du ticket) ne doit pas déclencher le fallback vers le nom v2."""
+    err = FakeMcpToolError({"content": [
+        {"type": "text", "text": "Issue does not exist or you do not have permission to see it."}]})
+    stub = StubClient({"listJiraIssueTransitions": TRANSITIONS},
+                      errors={"getTransitionsForJiraIssue": err})
+    with pytest.raises(FakeMcpToolError):
+        asyncio.run(jt._call(stub, "getTransitionsForJiraIssue",
+                             cloudId="x", issueIdOrKey="NOPE-1"))
+    assert [c[0] for c in stub.calls] == ["getTransitionsForJiraIssue"]
+
+
 def test_transition_accepts_bare_list_response():
     stub = StubClient({"getTransitionsForJiraIssue": TRANSITIONS["transitions"],
                        "transitionJiraIssue": {}})
