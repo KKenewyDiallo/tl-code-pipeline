@@ -17,12 +17,17 @@ def _extract_summary(spec_content: str) -> str:
     if not spec_content:
         return "Aucun résumé disponible"
     
-    # Chercher une section Résumé/Summary
-    patterns = [
-        r"##\s*(?:Résumé|Summary|Contexte|Context)\s*\n+(.+?)(?=\n\n##|\n#|\Z)",
-        r"(?:Résumé|Summary|Contexte|Context):\s*(.+?)(?=\n\n|\n#|\n##|\Z)",
-        r"^#.*?\n\n(.+?)(?=\n\n|\n#|\n##|\Z)",
-    ]
+    # Chercher d'abord le BUT du changement (section Goal de SPEC.md), puis un
+    # résumé, et seulement en dernier le contexte technique (constat TOOLLIVE-3603 :
+    # le résumé reprenait « Context » — routes, fichiers — au lieu du but).
+    # Plusieurs patterns par niveau : titre de section (## Goal) puis « Goal: ».
+    patterns = []
+    for names in ("Goal|Goals|Objectif|Objectifs|But|Objective",
+                  "Résumé|Summary",
+                  "Contexte|Context"):
+        patterns.append(rf"#{{1,4}}\s*(?:{names})\s*\n+(.+?)(?=\n\s*\n|\n#|\Z)")
+        patterns.append(rf"(?:^|\n)\s*\**(?:{names})\**\s*:\s*(.+?)(?=\n\n|\n#|\Z)")
+    patterns.append(r"^#.*?\n\n(.+?)(?=\n\n|\n#|\n##|\Z)")
     
     for pattern in patterns:
         match = re.search(pattern, spec_content, re.DOTALL | re.IGNORECASE)
