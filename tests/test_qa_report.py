@@ -396,14 +396,14 @@ class TestFormatTestResultsNewFormats:
 
     def test_pytest_q_format(self):
         """Format pytest -q : '8 passed in 0.5s'."""
-        test_results = {"passed": True, "cmd": "8 passed in 0.5s"}
+        test_results = {"passed": True, "cmd": "pytest -q", "log": "8 passed in 0.5s"}
         results = _format_test_results(test_results)
         assert len(results) == 1
         assert "✅ 8 test(s) passé(s)" in results[0]["status"]
 
     def test_pytest_q_with_failures(self):
         """Format pytest -q avec échecs : '2 failed, 8 passed in 0.5s'."""
-        test_results = {"passed": False, "cmd": "2 failed, 8 passed in 0.5s"}
+        test_results = {"passed": False, "cmd": "pytest -q", "log": "2 failed, 8 passed in 0.5s"}
         results = _format_test_results(test_results)
         assert len(results) == 1
         assert "✅ 8 passé(s)" in results[0]["status"]
@@ -411,14 +411,14 @@ class TestFormatTestResultsNewFormats:
 
     def test_jest_format(self):
         """Format Jest : 'Tests: 12 passed, 12 total'."""
-        test_results = {"passed": True, "cmd": "Tests: 12 passed, 12 total"}
+        test_results = {"passed": True, "cmd": "npm run test-unit -- --ci", "log": "Tests: 12 passed, 12 total"}
         results = _format_test_results(test_results)
         assert len(results) == 1
         assert "✅ 12 test(s) passé(s)" in results[0]["status"]
 
     def test_jest_format_with_failures(self):
         """Format Jest avec échecs : 'Tests: 10 passed, 2 failed, 12 total'."""
-        test_results = {"passed": False, "cmd": "Tests: 10 passed, 2 failed, 12 total"}
+        test_results = {"passed": False, "cmd": "npm run test-unit -- --ci", "log": "Tests: 10 passed, 2 failed, 12 total"}
         results = _format_test_results(test_results)
         assert len(results) == 1
         assert "✅ 10 passé(s)" in results[0]["status"]
@@ -456,6 +456,22 @@ class TestFormatTestResultsNewFormats:
 
 # --- Test avec des données réalistes ---
 
+    def test_real_jest_format_with_failures(self):
+        """Test avec un cas réel Jest : passed=False, log contient le résumé."""
+        test_results = {"passed": False, "cmd": "npm run test-unit -- --ci", "log": "Tests: 2 failed, 10 passed, 12 total"}
+        results = _format_test_results(test_results)
+        assert len(results) == 1
+        assert "✅ 10 passé(s)" in results[0]["status"]
+        assert "❌ 2 échoué(s)" in results[0]["status"]
+
+    def test_failed_without_summary_shows_error(self):
+        """Si passed=False et pas de résumé trouvé, afficher échec."""
+        test_results = {"passed": False, "cmd": "npm run test-unit", "log": "Some error output without summary"}
+        results = _format_test_results(test_results)
+        assert len(results) == 1
+        assert "❌ Tests en échec — voir le log de la CI" in results[0]["status"]
+
+
 class TestRealisticExample:
     """Test avec un exemple réaliste pour TOOLLIVE-3601."""
 
@@ -491,7 +507,7 @@ index abc123..def456 100644
 """
 
         # Test avec Jest
-        test_results_jest = {"passed": True, "cmd": "Tests: 12 passed, 12 total"}
+        test_results_jest = {"passed": True, "cmd": "npm run test-unit -- --ci", "log": "Tests: 12 passed, 12 total"}
         report = format_qa_report(
             spec_content=spec_content,
             review_link="https://gitlab.com/toollive/toollive/-/merge_requests/1590",
@@ -508,7 +524,7 @@ index abc123..def456 100644
         assert "Naviguer vers /hello" in report
 
         # Test avec pytest -q
-        test_results_pytest = {"passed": True, "cmd": "8 passed in 0.5s"}
+        test_results_pytest = {"passed": True, "cmd": "pytest -q", "log": "8 passed in 0.5s"}
         report = format_qa_report(
             spec_content=spec_content,
             review_link="https://gitlab.com/toollive/toollive/-/merge_requests/1590",
