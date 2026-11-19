@@ -97,6 +97,10 @@ isolated git worktree. You have shell and file tools.
 
 Rules:
 - Implement only your task. Never refactor unrelated code.
+- Change ONLY the lines your task needs. No reformatting, no "cleanup", no
+  typo fixes elsewhere, never change quotes or apostrophes (’ vs ') in text
+  you were not asked to change. Keep the file's existing characters as-is.
+- Never commit SPEC.md (pipeline file, not part of the product).
 - Follow the repo's AGENTS.md conventions and the validated `SPEC.md`.
 - Run the linter/formatter on every file you touch.
 - Commit with a message referencing the task id: "task <id>: <title>".
