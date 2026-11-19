@@ -108,3 +108,25 @@ def test_commit_all_retire_un_spec_md_deja_committe(repo):
     asyncio.run(git_tools.commit_all(str(repo), "review 2"))
     assert "SPEC.md" not in _committed(repo)
     assert (repo / "SPEC.md").exists()
+
+
+def test_diff_contre_origin_quand_les_fusions_sont_sur_develop(tmp_path):
+    """Constat TOOLLIVE-3604 / MR !1592 : les fusions se font sur le develop LOCAL,
+    donc `develop...HEAD` était vide et le rapport QA disait « Aucun fichier modifié »."""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-q", "-b", "develop")
+    _git(origin, "config", "user.email", "qa@test")
+    _git(origin, "config", "user.name", "QA")
+    (origin / "hello.component.html").write_text("<div>Partners with a ToolLive account</div>\n")
+    _git(origin, "add", "-A")
+    _git(origin, "commit", "-qm", "init")
+    work = tmp_path / "work"
+    subprocess.run(["git", "clone", "-q", str(origin), str(work)], check=True)
+    _git(work, "config", "user.email", "qa@test")
+    _git(work, "config", "user.name", "QA")
+    (work / "hello.component.html").write_text("<div>Partners using ToolLive</div>\n")
+    _git(work, "commit", "-qam", "merge agent/t1")  # fusion sur le develop local
+    diff = asyncio.run(git_tools.diff_against_base(str(work)))
+    assert modified_files(diff["diff"]) == ["hello.component.html"]
+    assert diff["base"] == "develop"

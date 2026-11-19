@@ -96,13 +96,24 @@ def _extract_acceptance_criteria(spec_content: str) -> list[dict]:
     multi_line_pattern = r"(?:^|\n)\s*(?:QUAND|WHEN)\s+(.+?)\s*\n\s*(?:ALORS|THEN)\s+(.+?)\s*(?=\n|$)"
     
     # Extraire les scénarios sur une seule ligne avec gras
+    last = None  # index du dernier critère trouvé, pour les lignes de suite
     for line in content.split("\n"):
+        # Ligne de suite d'un critère coupé sur plusieurs lignes (constat
+        # TOOLLIVE-3604 : « ALORS le texte « … » » sans la fin) : ligne indentée,
+        # ni puce, ni titre, ni nouveau QUAND/WHEN.
+        if (last is not None and line[:1] in (" ", "\t") and line.strip()
+                and not re.match(r"\s*([-*•]|#|\**(WHEN|QUAND|THEN|ALORS)\b)", line, re.IGNORECASE)):
+            criteria[last]["scenario"] += " " + line.strip()
+            continue
+        if not line.strip() or re.match(r"\s*([-*•]|#)", line):
+            last = None
         line_match = re.match(bold_single_line, line, re.IGNORECASE | re.MULTILINE)
         if line_match:
             when_part = line_match.group(1).strip()
             then_part = line_match.group(2).strip()
             scenario_text = f"QUAND {when_part} ALORS {then_part}"
             criteria.append({"id": len(criteria) + 1, "scenario": scenario_text, "status": "non testé"})
+            last = len(criteria) - 1
             continue
         
         # Extraire les scénarios sur une seule ligne sans gras
@@ -112,6 +123,7 @@ def _extract_acceptance_criteria(spec_content: str) -> list[dict]:
             then_part = line_match.group(2).strip()
             scenario_text = f"QUAND {when_part} ALORS {then_part}"
             criteria.append({"id": len(criteria) + 1, "scenario": scenario_text, "status": "non testé"})
+            last = len(criteria) - 1
             continue
         
         # Extraire les scénarios sur une seule ligne sans puce
@@ -121,6 +133,7 @@ def _extract_acceptance_criteria(spec_content: str) -> list[dict]:
             then_part = line_match.group(2).strip()
             scenario_text = f"QUAND {when_part} ALORS {then_part}"
             criteria.append({"id": len(criteria) + 1, "scenario": scenario_text, "status": "non testé"})
+            last = len(criteria) - 1
             continue
     
     # Extraire les scénarios sur plusieurs lignes

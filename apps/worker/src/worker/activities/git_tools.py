@@ -371,7 +371,15 @@ async def push_branch(repo: str, branch: str) -> dict:
 async def diff_against_base(worktree: str) -> dict:
     """Diff de la branche courante contre la branche de base détectée."""
     base = await base_branch(worktree)
-    res = await _sh(["git", "diff", f"{base}...HEAD"], worktree)
+    # Les fusions séquentielles se font sur la branche locale `base` elle-même
+    # (le workspace est en checkout de develop) : `develop...HEAD` est alors VIDE.
+    # On compare donc à la branche distante `origin/<base>` quand elle existe
+    # (constat TOOLLIVE-3604 / MR !1592 : rapport QA « Aucun fichier modifié »).
+    ref = base
+    remote = await _sh(["git", "rev-parse", "--verify", "--quiet", f"origin/{base}"], worktree)
+    if remote["code"] == 0:
+        ref = f"origin/{base}"
+    res = await _sh(["git", "diff", f"{ref}...HEAD"], worktree)
     return {"diff": res["output"], "base": base}
 
 
