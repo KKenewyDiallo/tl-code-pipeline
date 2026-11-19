@@ -562,3 +562,29 @@ The route about-us is declared in src/app/hello/hello.routes.ts and lazy-loads H
     def test_context_si_pas_de_goal(self):
         spec = "# Spec\n\n## Context\nLa page about-us affiche un compteur.\n"
         assert _extract_summary(spec).startswith("La page about-us")
+
+
+class TestCriteresSurPlusieursLignes:
+    """Constat TOOLLIVE-3604 : critère coupé après « ALORS le texte « … » »."""
+
+    def test_ligne_de_suite_indentee(self):
+        spec = (
+            "## Acceptance criteria\n"
+            "- QUAND j'ouvre la page /about-us ALORS le texte « Partners with a ToolLive account »\n"
+            "  est remplacé par « Partners using ToolLive »\n"
+            "- QUAND j'ouvre la page /about-us ALORS tout le reste de la page est inchangé\n"
+        )
+        crit = _extract_acceptance_criteria(spec)
+        assert len(crit) == 2
+        assert crit[0]["scenario"].endswith("est remplacé par « Partners using ToolLive »")
+        assert crit[1]["scenario"].endswith("tout le reste de la page est inchangé")
+
+    def test_pas_de_suite_apres_ligne_vide(self):
+        spec = (
+            "## Acceptance criteria\n"
+            "- WHEN I open /about-us THEN I see the label\n"
+            "\n"
+            "  Note indentée hors critère\n"
+        )
+        crit = _extract_acceptance_criteria(spec)
+        assert crit[0]["scenario"] == "QUAND I open /about-us ALORS I see the label"
