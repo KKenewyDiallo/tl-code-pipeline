@@ -39,6 +39,7 @@ with wf.unsafe.imports_passed_through():
     from worker.activities import agent_runner, git_tools, jira_tools, test_runner
     from worker.activities.jira_tools import atlassian_connector
     from worker.activities.qa_report import format_qa_report
+    from worker.activities.scope_guard import modified_files, plan_hints, scope_note
 
 GATE_TIMEOUT = timedelta(hours=24)
 
@@ -421,6 +422,10 @@ class SpecToTests:
         push_target = ((await git_tools.current_branch(repo))["branch"] if repo_url
                        else release_branch)
         review_link = (mr["mr"] or {}).get("web_url") or f"{repo} (diff vs {base})"
+        hints = plan_hints(tasks)
+        out_note = scope_note(modified_files(diff["diff"]), hints)
+        if jira_key and out_note:
+            await jira_tools.jira_comment(jira_key, out_note)
         if jira_key:
             rev = await jira_tools.jira_transition_review(jira_key)
             rev_note = (f" Statut passé à « {rev.get('to') or rev.get('transition')} »."
@@ -447,7 +452,8 @@ class SpecToTests:
             await self._gate(
                 subject=(f"Review finale: {change_id} — MR: {review_link}"
                          + (f" (tour {review_round + 1})" if review_round else "")),
-                payload=(f"{review_link}\n\n{diff['diff'][:2000]}\n\nTests:\n{final['log'][:1500]}"
+                payload=(f"{review_link}\n\n" + (f"{out_note}\n\n" if out_note else "")
+                         + f"{diff['diff'][:2000]}\n\nTests:\n{final['log'][:1500]}"
                          f"\n\n`approve` = validé, `reject` = rejeté, tout autre message (`reply`) "
                          f"= retour de review traité par le pipeline (correction + re-push)."),
                 execution_id=execution_id, jira_key=jira_key,
@@ -485,6 +491,7 @@ class SpecToTests:
             if repo_url:
                 await git_tools.push_branch(repo, push_target)
             diff = await git_tools.diff_against_base(repo)
+            out_note = scope_note(modified_files(diff["diff"]), hints)
 
         # ------------------------------------------------------------------
         # 7. ESCALADE — pas de merge automatique de la MR (l'auto-merge échouait en

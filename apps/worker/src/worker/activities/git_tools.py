@@ -36,6 +36,8 @@ import urllib.request
 
 import mistralai.workflows as workflows
 
+from worker.activities.scope_guard import PIPELINE_FILES
+
 
 async def _sh(cmd: list[str], cwd: str, extra_env: dict | None = None) -> dict:
     """Exécute une commande shell, renvoie un résultat JSON-sérialisable."""
@@ -318,7 +320,15 @@ async def create_worktree(repo: str, task_id: str) -> dict:
 
 @workflows.activity()
 async def commit_all(worktree: str, message: str) -> dict:
-    res = await _sh(["bash", "-lc", "git add -A && git commit -m \"$1\"", "_", message], worktree)
+    """Commit de tout le worktree SAUF les fichiers du pipeline (SPEC.md) : ils
+    restent locaux et ne doivent jamais partir dans le repo cible (constat
+    TOOLLIVE-3601 / MR !1590 : SPEC.md committé au tour de review)."""
+    excludes = " ".join(f"':(exclude){name}'" for name in PIPELINE_FILES)
+    script = ("git add -A -- . " + excludes
+              + " && for f in " + " ".join(PIPELINE_FILES)
+              + "; do git rm -q --cached --ignore-unmatch \"$f\"; done"
+              + " && git commit -m \"$1\"")
+    res = await _sh(["bash", "-lc", script, "_", message], worktree)
     return res
 
 
