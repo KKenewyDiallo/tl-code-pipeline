@@ -40,6 +40,7 @@ with wf.unsafe.imports_passed_through():
     from worker.activities.jira_tools import atlassian_connector
     from worker.activities.qa_report import format_qa_report
     from worker.activities.scope_guard import modified_files, plan_hints, scope_note
+    from worker.activities.plan_guard import consolidate_tasks, plan_note
 
 GATE_TIMEOUT = timedelta(hours=24)
 
@@ -96,6 +97,7 @@ class SpecToTests:
         self.verdict: str | None = None
         self.phase: str = "init"
         self.pending_question: str | None = None
+        self.plan_note: str = ""
         self.conversation: list[dict] = []
         self.replies: int = 0
 
@@ -361,6 +363,11 @@ class SpecToTests:
         if not tasks:
             raise RuntimeError(
                 f"planner: aucune tâche après {MAX_PLANNER_ATTEMPTS} tentatives (dernière réponse: {plan[:300]!r})")
+        planned = tasks
+        tasks = consolidate_tasks(tasks)
+        self.plan_note = plan_note(planned, tasks)
+        if jira_key and self.plan_note:
+            await jira_tools.jira_comment(jira_key, self.plan_note)
         by_id = {t["id"]: t for t in tasks}
 
         # ------------------------------------------------------------------
