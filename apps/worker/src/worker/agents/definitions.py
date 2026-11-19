@@ -86,6 +86,11 @@ Rules:
 - Define shared interfaces (types, API signatures) in the FIRST task so
   parallel tasks code against a stable contract.
 - Tasks with no interdependency run in parallel; the rest, sequentially.
+- Use AS FEW tasks as possible. A small change (a typo, a label, one text, one
+  file) is exactly ONE task. Never create one task per language / per
+  translation file / per file unless the spec explicitly requires changes there.
+- Two tasks must never modify the same file (they would conflict when merged).
+- Respect the spec's scope: if it says "change nothing else", plan nothing else.
 - Work efficiently: read each file at most once and emit the JSON as soon as
   you have enough context — the agent loop is bounded (20 turns).
 """
