@@ -9,6 +9,9 @@ import re
 from typing import Any
 
 
+GENERIC_STEP = "Vérifier le fonctionnement général de la fonctionnalité modifiée"
+
+
 def _extract_summary(spec_content: str) -> str:
     """Extrait un résumé de 1-2 phrases depuis SPEC.md.
     
@@ -135,6 +138,17 @@ def _extract_acceptance_criteria(spec_content: str) -> list[dict]:
             criteria.append({"id": len(criteria) + 1, "scenario": scenario_text, "status": "non testé"})
             last = len(criteria) - 1
             continue
+
+        # Dernier recours : QUAND/WHEN … ALORS/THEN n'importe où dans la ligne
+        # (listes numérotées « 1. », préfixes « Scénario 1 : », gras partiel…).
+        line_match = re.search(
+            r"\**\b(?:WHEN|QUAND)\b\**\s+(.+?)\s*,?\s*\**\b(?:THEN|ALORS)\b\**\s+(.+?)\s*$",
+            line, re.IGNORECASE)
+        if line_match:
+            scenario_text = f"QUAND {line_match.group(1).strip()} ALORS {line_match.group(2).strip()}"
+            criteria.append({"id": len(criteria) + 1, "scenario": scenario_text, "status": "non testé"})
+            last = len(criteria) - 1
+            continue
     
     # Extraire les scénarios sur plusieurs lignes
     multi_line_scenarios = re.findall(multi_line_pattern, content, re.DOTALL | re.IGNORECASE | re.MULTILINE)
@@ -171,7 +185,7 @@ def _extract_manual_test_steps(spec_content: str) -> list[str]:
     """
     steps = []
     if not spec_content:
-        return ["Vérifier le fonctionnement général de la fonctionnalité modifiée"]
+        return [GENERIC_STEP]
     
     patterns = [
         r"(?:Test manuel|Manual testing|Comment tester|How to test):\s*\n+(.+?)(?=\n\n#|\Z)",
@@ -192,7 +206,7 @@ def _extract_manual_test_steps(spec_content: str) -> list[str]:
                 return steps
     
     # Si pas trouvé, retourner une instruction générique
-    return ["Vérifier le fonctionnement général de la fonctionnalité modifiée"]
+    return [GENERIC_STEP]
 
 
 def _extract_modified_files(diff_output: str) -> list[str]:
@@ -336,6 +350,11 @@ def format_qa_report(
     modified_files = _extract_modified_files(diff_output)
     test_results_formatted = _format_test_results(test_results)
     manual_steps = _extract_manual_test_steps(spec_content)
+    if manual_steps == [GENERIC_STEP] and criteria:
+        # Pas de section « test manuel » dans la spec : on déduit les étapes des
+        # critères (constat TOOLLIVE-3606/3607 : étape générique inutile pour la QA).
+        manual_steps = [f"Vérifier : {c['scenario']}" for c in criteria]
+        manual_steps.append("Vérifier qu'aucun autre texte ni élément de la page n'a changé.")
     
     # Construire le rapport
     lines = []
