@@ -39,7 +39,6 @@ with wf.unsafe.imports_passed_through():
     from worker.activities import agent_runner, git_tools, jira_tools, test_runner
     from worker.activities.jira_tools import atlassian_connector
     from worker.activities.qa_report import format_qa_report
-    from worker.activities.qa_report import format_qa_report
 
 GATE_TIMEOUT = timedelta(hours=24)
 
@@ -436,6 +435,9 @@ class SpecToTests:
                 diff_output=diff.get("diff", ""),
                 test_results=final,
             )
+            # Ajouter la note de statut si présente
+            if rev_note:
+                qa_report += f"\n\n{rev_note}"
             await jira_tools.jira_comment(jira_key, qa_report)
 
         # ------------------------------------------------------------------

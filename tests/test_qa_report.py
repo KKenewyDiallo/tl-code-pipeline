@@ -194,14 +194,14 @@ index 1..2
 class TestFormatTestResults:
     def test_format_passed_tests(self, passed_tests_result):
         results = _format_test_results(passed_tests_result)
-        assert len(results) == 2
-        assert all(r["status"] == "✅ PASSED" for r in results)
+        assert len(results) == 1
+        assert "✅" in results[0]["status"]
 
     def test_format_failed_tests(self, failed_tests_result):
         results = _format_test_results(failed_tests_result)
-        assert len(results) == 2
-        assert any(r["status"] == "❌ FAILED" for r in results)
-        assert any(r["status"] == "✅ PASSED" for r in results)
+        assert len(results) == 1
+        assert "❌" in results[0]["status"]
+        assert "✅" in results[0]["status"]
 
     def test_format_unrunnable_tests(self, unrunnable_tests_result):
         results = _format_test_results(unrunnable_tests_result)
@@ -238,7 +238,7 @@ class TestFormatQaReport:
         assert "pages/about-us.html" in report
         assert "**Critères d'acceptation** :" in report
         assert "**Tests automatiques** :" in report
-        assert "✅ PASSED" in report
+        assert "✅" in report
         assert "**Comment tester à la main** :" in report
 
     def test_report_with_no_spec(self, fake_diff, passed_tests_result):
@@ -271,8 +271,8 @@ class TestFormatQaReport:
             diff_output=fake_diff,
             test_results=failed_tests_result,
         )
-        assert "❌ FAILED" in report
-        assert "✅ PASSED" in report
+        assert "❌" in report
+        assert "✅" in report
 
     def test_report_with_no_diff(
         self, simple_spec_content, passed_tests_result
@@ -335,5 +335,185 @@ index abc..def 100644
         assert "https://gitlab.com/toollive/toollive/-/merge_requests/3601" in report
         assert "src/pages/AboutUs.jsx" in report
         assert "QUAND un utilisateur visite la page /about-us" in report
-        assert "✅ PASSED" in report
+        assert "✅" in report
         assert "Naviguer vers /about-us" in report
+
+
+# --- Nouveaux tests pour les critères sur une seule ligne ---
+
+class TestExtractAcceptanceCriteriaSingleLine:
+    """Tests pour les critères d'acceptation sur une seule ligne."""
+
+    def test_single_line_when_then(self):
+        """Critère WHEN/THEN sur une seule ligne sans puces."""
+        spec = "WHEN user visits /about-us THEN they see 90 000+ members"
+        criteria = _extract_acceptance_criteria(spec)
+        assert len(criteria) == 1
+        assert "QUAND" in criteria[0]["scenario"]
+        assert "ALORS" in criteria[0]["scenario"]
+
+    def test_single_line_dash_when_then(self):
+        """Critère WHEN/THEN avec puce -."""
+        spec = "- WHEN user visits /about-us THEN they see 90 000+ members"
+        criteria = _extract_acceptance_criteria(spec)
+        assert len(criteria) == 1
+        assert "QUAND" in criteria[0]["scenario"]
+
+    def test_single_line_star_when_then(self):
+        """Critère WHEN/THEN avec puce *."""
+        spec = "* WHEN user visits /about-us THEN they see 90 000+ members"
+        criteria = _extract_acceptance_criteria(spec)
+        assert len(criteria) == 1
+
+    def test_single_line_bold_when_then(self):
+        """Critère WHEN/THEN avec gras **."""
+        spec = "- **WHEN** user visits /about-us **THEN** they see 90 000+ members"
+        criteria = _extract_acceptance_criteria(spec)
+        assert len(criteria) == 1
+        assert "QUAND" in criteria[0]["scenario"]
+        assert "ALORS" in criteria[0]["scenario"]
+
+    def test_single_line_quand_alors(self):
+        """Critère QUAND/ALORS sur une seule ligne."""
+        spec = "- **QUAND** l'utilisateur ouvre /about-us **ALORS** il voit « 90 000+ »"
+        criteria = _extract_acceptance_criteria(spec)
+        assert len(criteria) == 1
+        assert "QUAND" in criteria[0]["scenario"]
+        assert "ALORS" in criteria[0]["scenario"]
+
+    def test_multiple_single_line_criteria(self):
+        """Plusieurs critères sur une seule ligne."""
+        spec = """- **WHEN** user visits /about-us **THEN** they see 90 000+
+- **WHEN** page loads **THEN** counter is visible"""
+        criteria = _extract_acceptance_criteria(spec)
+        assert len(criteria) == 2
+
+
+# --- Nouveaux tests pour les résultats de tests ---
+
+class TestFormatTestResultsNewFormats:
+    """Tests pour les nouveaux formats de résultats de tests."""
+
+    def test_pytest_q_format(self):
+        """Format pytest -q : '8 passed in 0.5s'."""
+        test_results = {"passed": True, "cmd": "8 passed in 0.5s"}
+        results = _format_test_results(test_results)
+        assert len(results) == 1
+        assert "✅ 8 test(s) passé(s)" in results[0]["status"]
+
+    def test_pytest_q_with_failures(self):
+        """Format pytest -q avec échecs : '2 failed, 8 passed in 0.5s'."""
+        test_results = {"passed": False, "cmd": "2 failed, 8 passed in 0.5s"}
+        results = _format_test_results(test_results)
+        assert len(results) == 1
+        assert "✅ 8 passé(s)" in results[0]["status"]
+        assert "❌ 2 échoué(s)" in results[0]["status"]
+
+    def test_jest_format(self):
+        """Format Jest : 'Tests: 12 passed, 12 total'."""
+        test_results = {"passed": True, "cmd": "Tests: 12 passed, 12 total"}
+        results = _format_test_results(test_results)
+        assert len(results) == 1
+        assert "✅ 12 test(s) passé(s)" in results[0]["status"]
+
+    def test_jest_format_with_failures(self):
+        """Format Jest avec échecs : 'Tests: 10 passed, 2 failed, 12 total'."""
+        test_results = {"passed": False, "cmd": "Tests: 10 passed, 2 failed, 12 total"}
+        results = _format_test_results(test_results)
+        assert len(results) == 1
+        assert "✅ 10 passé(s)" in results[0]["status"]
+        assert "❌ 2 échoué(s)" in results[0]["status"]
+
+    def test_passed_failed_counts(self):
+        """Utilisation des comptes passed/failed directement."""
+        test_results = {"passed": 5, "failed": 2}
+        results = _format_test_results(test_results)
+        assert len(results) == 1
+        assert "✅ 5 passé(s)" in results[0]["status"]
+        assert "❌ 2 échoué(s)" in results[0]["status"]
+
+    def test_only_passed_count(self):
+        """Seulement des tests passés."""
+        test_results = {"passed": 8, "failed": 0}
+        results = _format_test_results(test_results)
+        assert len(results) == 1
+        assert "✅ 8 test(s) passé(s)" in results[0]["status"]
+
+    def test_only_failed_count(self):
+        """Seulement des tests échoués."""
+        test_results = {"passed": 0, "failed": 3}
+        results = _format_test_results(test_results)
+        assert len(results) == 1
+        assert "❌ 3 test(s) échoué(s)" in results[0]["status"]
+
+    def test_unrunnable_still_shows_warning(self):
+        """Tests non exécutables : doit afficher l'avertissement."""
+        test_results = {"unrunnable": True, "cmd": "some command"}
+        results = _format_test_results(test_results)
+        assert len(results) == 1
+        assert "⚠️ Aucun test automatique exécuté" in results[0]["status"]
+
+
+# --- Test avec des données réalistes ---
+
+class TestRealisticExample:
+    """Test avec un exemple réaliste pour TOOLLIVE-3601."""
+
+    def test_realistic_hello_component_example(self):
+        """Test avec un SPEC.md et une diff réalistes pour hello.component.html."""
+        spec_content = """# TOOLLIVE-3601: Mise à jour du compteur membres
+
+## Résumé
+Mettre à jour l'affichage du nombre de membres de "50 000+" à "90 000+" dans le composant hello.
+
+## Critères d'acceptation
+- **WHEN** l'utilisateur visite /hello **THEN** il voit "90 000+ membres"
+- **QUAND** la page est chargée **ALORS** le compteur est mis à jour
+
+## Test manuel
+1. Naviguer vers /hello
+2. Vérifier que le texte affiche "90 000+ membres"
+"""
+
+        diff_output = """diff --git a/src/app/hello/hello.component.html b/src/app/hello/hello.component.html
+index abc123..def456 100644
+--- a/src/app/hello/hello.component.html
++++ b/src/app/hello/hello.component.html
+@@ -47,7 +47,7 @@
+ <div class="counter">
+   <span>Nous avons </span>
+   <strong>
+-   50 000+
++   90 000+
+   </strong>
+   <span> membres</span>
+ </div>
+"""
+
+        # Test avec Jest
+        test_results_jest = {"passed": True, "cmd": "Tests: 12 passed, 12 total"}
+        report = format_qa_report(
+            spec_content=spec_content,
+            review_link="https://gitlab.com/toollive/toollive/-/merge_requests/1590",
+            diff_output=diff_output,
+            test_results=test_results_jest,
+        )
+
+        assert "## 📋 Rapport pour la QA" in report
+        assert "Mettre à jour l'affichage du nombre de membres" in report
+        assert "https://gitlab.com/toollive/toollive/-/merge_requests/1590" in report
+        assert "src/app/hello/hello.component.html" in report
+        assert "QUAND l'utilisateur visite /hello ALORS il voit" in report
+        assert "✅ 12 test(s) passé(s)" in report
+        assert "Naviguer vers /hello" in report
+
+        # Test avec pytest -q
+        test_results_pytest = {"passed": True, "cmd": "8 passed in 0.5s"}
+        report = format_qa_report(
+            spec_content=spec_content,
+            review_link="https://gitlab.com/toollive/toollive/-/merge_requests/1590",
+            diff_output=diff_output,
+            test_results=test_results_pytest,
+        )
+
+        assert "✅ 8 test(s) passé(s)" in report
