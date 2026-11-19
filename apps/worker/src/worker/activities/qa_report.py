@@ -203,10 +203,11 @@ def _extract_modified_files(diff_output: str) -> list[str]:
 def _format_test_results(test_results: dict) -> list[dict]:
     """Formate les résultats des tests pour le rapport.
     
-    Utilise d'abord test_results["passed"] et test_results["cmd"],
-    puis un résumé (nombre de tests passés/échoués) au lieu de lister chaque test.
+    Utilise test_results["passed"] et parse le log pour Jest et pytest -q.
+    Affiche un résumé (nombre de tests passés/échoués) au lieu de lister chaque test.
     
-    test_results est le dict retourné par test_runner.run_tests()
+    test_results est le dict retourné par test_runner.run_tests() :
+    {"passed": bool, "cmd": str, "log": str}
     """
     # Cas 1: Aucun test exécuté
     if not test_results:
@@ -231,12 +232,45 @@ def _format_test_results(test_results: dict) -> list[dict]:
             else:
                 return [{"status": f"✅ {passed_count} passé(s), ❌ {failed_count} échoué(s)"}]
     
-    # Cas 4: Parser le log pour pytest standard
+    # Cas 4: Parser le log pour pytest standard et pytest -q
     log = test_results.get("log", "")
     if log:
+        # pytest -q: "8 passed in 0.5s" ou "2 failed, 8 passed in 0.5s"
+        pytest_q_match = re.search(r"(\d+)\s*passed", log)
+        pytest_q_fail_match = re.search(r"(\d+)\s*failed", log)
+        if pytest_q_match:
+            passed = int(pytest_q_match.group(1))
+            failed = int(pytest_q_fail_match.group(1)) if pytest_q_fail_match else 0
+            total = passed + failed
+            if total > 0:
+                if failed == 0:
+                    return [{"status": f"✅ {total} test(s) passé(s)"}]
+                elif passed == 0:
+                    return [{"status": f"❌ {total} test(s) échoué(s)"}]
+                else:
+                    return [{"status": f"✅ {passed} passé(s), ❌ {failed} échoué(s)"}]
+        
+        # Jest: "Tests: 12 passed, 12 total" ou "Tests: 10 passed, 2 failed, 12 total"
+        jest_match = re.search(r"Tests:\s*(\d+)\s*passed,\s*(\d+)\s*total", log)
+        if jest_match:
+            passed = int(jest_match.group(1))
+            total = int(jest_match.group(2))
+            failed = total - passed
+            if failed == 0:
+                return [{"status": f"✅ {total} test(s) passé(s)"}]
+            else:
+                return [{"status": f"✅ {passed} passé(s), ❌ {failed} échoué(s)"}]
+        
+        # Jest avec échecs: "Tests: 10 passed, 2 failed, 12 total"
+        jest_fail_match = re.search(r"Tests:\s*(\d+)\s*passed,\s*(\d+)\s*failed,\s*(\d+)\s*total", log)
+        if jest_fail_match:
+            passed = int(jest_fail_match.group(1))
+            failed = int(jest_fail_match.group(2))
+            return [{"status": f"✅ {passed} passé(s), ❌ {failed} échoué(s)"}]
+        
+        # pytest standard: parser les lignes PASSED/FAILED
         passed_tests = 0
         failed_tests = 0
-        
         for line in log.split("\n"):
             if " PASSED" in line and "test_" in line:
                 passed_tests += 1
@@ -252,35 +286,13 @@ def _format_test_results(test_results: dict) -> list[dict]:
             else:
                 return [{"status": f"✅ {passed_tests} passé(s), ❌ {failed_tests} échoué(s)"}]
     
-    # Cas 5: Parser cmd pour Jest (Tests: 12 passed, 12 total)
-    cmd = test_results.get("cmd", "")
-    if cmd:
-        # Jest: "Tests: 12 passed, 12 total"
-        jest_match = re.search(r"Tests:\s*(\d+)\s*passed,\s*(\d+)\s*total", cmd)
-        if jest_match:
-            passed = int(jest_match.group(1))
-            total = int(jest_match.group(2))
-            failed = total - passed
-            if failed == 0:
-                return [{"status": f"✅ {total} test(s) passé(s)"}]
-            else:
-                return [{"status": f"✅ {passed} passé(s), ❌ {failed} échoué(s)"}]
-        
-        # pytest -q: "8 passed in 0.5s" ou "2 failed, 8 passed in 0.5s"
-        pytest_q_match = re.search(r"(\d+)\s*passed", cmd)
-        pytest_q_fail_match = re.search(r"(\d+)\s*failed", cmd)
-        if pytest_q_match:
-            passed = int(pytest_q_match.group(1))
-            failed = int(pytest_q_fail_match.group(1)) if pytest_q_fail_match else 0
-            total = passed + failed
-            if total > 0:
-                if failed == 0:
-                    return [{"status": f"✅ {total} test(s) passé(s)"}]
-                else:
-                    return [{"status": f"✅ {passed} passé(s), ❌ {failed} échoué(s)"}]
+    # Cas 5: Si passed est False et qu'on n'a pas trouvé de résumé, afficher échec
+    if test_results.get("passed") is False:
+        return [{"status": "❌ Tests en échec — voir le log de la CI"}]
     
     # Cas 6: Aucun test trouvé
     return [{"status": "⚠️ Aucun test automatique exécuté — test manuel obligatoire"}]
+
 
 
 def format_qa_report(
