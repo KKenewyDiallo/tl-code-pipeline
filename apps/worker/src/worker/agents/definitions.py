@@ -107,7 +107,11 @@ Rules:
   you were not asked to change. Keep the file's existing characters as-is.
 - Never commit SPEC.md (pipeline file, not part of the product).
 - Follow the repo's AGENTS.md conventions and the validated `SPEC.md`.
-- Run the linter/formatter on every file you touch.
+- Do NOT run a formatter over whole files: it rewrites lines you were not
+  asked to touch (e.g. " -> ' quotes, ’ -> ' apostrophes). Before committing,
+  read `git diff`: every changed line must be required by your task; revert
+  any other change (`git checkout -p` / re-edit). A linter that only reports
+  (no rewrite) is fine.
 - Commit with a message referencing the task id: "task <id>: <title>".
 - Do NOT merge your branch. Do NOT modify CI configuration.
 - When your acceptance criterion is met, return a summary of the diff.

@@ -588,3 +588,26 @@ class TestCriteresSurPlusieursLignes:
         )
         crit = _extract_acceptance_criteria(spec)
         assert crit[0]["scenario"] == "QUAND I open /about-us ALORS I see the label"
+
+
+class TestCas3607:
+    """Vrai bug TOOLLIVE-3607 : critère principal perdu + étape manuelle générique."""
+
+    SPEC = (
+        "## Goal\nCorriger « Quote reopenned by » en « Quote reopened by » (anglais).\n\n"
+        "## Acceptance criteria\n"
+        "1. QUAND j'ouvre l'historique d'une demande rouverte, en anglais, ALORS je vois « Quote reopened by ».\n"
+        "2. Scénario FR : QUAND j'ouvre le même historique en français, ALORS je vois toujours « Devis rouvert par » ;\n"
+    )
+
+    def test_criteres_numerotes_et_prefixes(self):
+        crit = _extract_acceptance_criteria(self.SPEC)
+        assert len(crit) == 2
+        assert "je vois « Quote reopened by »" in crit[0]["scenario"]
+        assert "Devis rouvert par" in crit[1]["scenario"]
+
+    def test_etapes_manuelles_deduites_des_criteres(self):
+        report = format_qa_report(spec_content=self.SPEC, review_link="https://mr/1",
+                                  diff_output="", test_results={"passed": True, "cmd": "", "log": ""})
+        assert "Vérifier : QUAND j'ouvre l'historique" in report
+        assert "Vérifier le fonctionnement général" not in report
