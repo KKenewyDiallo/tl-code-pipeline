@@ -533,3 +533,32 @@ index abc123..def456 100644
         )
 
         assert "✅ 8 test(s) passé(s)" in report
+
+
+class TestSummaryPrefersGoal:
+    """Constat TOOLLIVE-3603 : le résumé reprenait la section Context (technique)."""
+
+    SPEC_3603 = """# Spec toollive-3603
+
+## Goal
+Replace the label "Connected assets" with "Connected tools" on the /about-us page.
+
+## Context
+The route about-us is declared in src/app/hello/hello.routes.ts and lazy-loads HelloComponent.
+
+## Acceptance criteria
+- WHEN I open /about-us THEN I see "Connected tools"
+"""
+
+    def test_goal_avant_context(self):
+        summary = _extract_summary(self.SPEC_3603)
+        assert summary.startswith('Replace the label "Connected assets"')
+        assert "hello.routes.ts" not in summary
+
+    def test_objectif_en_francais(self):
+        spec = "# Spec\n\n## Contexte\nDétails techniques.\n\n## Objectif\nAfficher 90 000+ sur /about-us.\n"
+        assert _extract_summary(spec).startswith("Afficher 90 000+")
+
+    def test_context_si_pas_de_goal(self):
+        spec = "# Spec\n\n## Context\nLa page about-us affiche un compteur.\n"
+        assert _extract_summary(spec).startswith("La page about-us")
