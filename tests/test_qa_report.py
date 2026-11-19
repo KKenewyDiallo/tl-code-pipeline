@@ -611,3 +611,22 @@ class TestCas3607:
                                   diff_output="", test_results={"passed": True, "cmd": "", "log": ""})
         assert "Vérifier : QUAND j'ouvre l'historique" in report
         assert "Vérifier le fonctionnement général" not in report
+
+
+def test_format_openspec_when_then_sur_deux_puces():
+    """Constat TOOLLIVE-3607 (MR !1595) : le critère principal, au format OpenSpec
+    (- **WHEN** … / - **THEN** … / - **AND** …), manquait au rapport."""
+    spec = (
+        "## Requirements\n"
+        "#### Scenario: Historique en anglais\n"
+        "- **WHEN** j'ouvre l'historique d'une demande rouverte en anglais\n"
+        "- **THEN** je vois « Quote reopened by »\n"
+        "- **AND** je ne vois plus « Quote reopenned by »\n\n"
+        "#### Scenario: Autres langues\n"
+        "- QUAND j'ouvre le même historique en français, ALORS je vois toujours « Devis rouvert par »\n"
+    )
+    crit = _extract_acceptance_criteria(spec)
+    assert len(crit) == 2
+    assert crit[0]["scenario"] == ("QUAND j'ouvre l'historique d'une demande rouverte en anglais "
+                                   "ALORS je vois « Quote reopened by » ET je ne vois plus « Quote reopenned by »")
+    assert "Devis rouvert par" in crit[1]["scenario"]

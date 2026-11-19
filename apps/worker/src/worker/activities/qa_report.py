@@ -100,6 +100,7 @@ def _extract_acceptance_criteria(spec_content: str) -> list[dict]:
     
     # Extraire les scénarios sur une seule ligne avec gras
     last = None  # index du dernier critère trouvé, pour les lignes de suite
+    pending_when = None  # WHEN seul sur sa ligne, en attente du THEN
     for line in content.split("\n"):
         # Ligne de suite d'un critère coupé sur plusieurs lignes (constat
         # TOOLLIVE-3604 : « ALORS le texte « … » » sans la fin) : ligne indentée,
@@ -108,8 +109,26 @@ def _extract_acceptance_criteria(spec_content: str) -> list[dict]:
                 and not re.match(r"\s*([-*•]|#|\**(WHEN|QUAND|THEN|ALORS)\b)", line, re.IGNORECASE)):
             criteria[last]["scenario"] += " " + line.strip()
             continue
+        only_and = re.match(r"^\s*(?:[-*•])?\s*\**(?:AND|ET)\b\**\s+(.+?)\s*$", line, re.IGNORECASE)
+        if only_and and last is not None:
+            criteria[last]["scenario"] += f" ET {only_and.group(1).strip()}"
+            continue
         if not line.strip() or re.match(r"\s*([-*•]|#)", line):
             last = None
+        # Format OpenSpec : « - **WHEN** … » puis, ligne suivante, « - **THEN** … »
+        # (et éventuellement « - **AND** … ») — constat TOOLLIVE-3607 : le critère
+        # principal, écrit ainsi, manquait au rapport.
+        only_when = re.match(r"^\s*(?:[-*•]|\d+[.)])?\s*\**(?:WHEN|QUAND)\b\**\s+(.+?)\s*$", line, re.IGNORECASE)
+        if only_when and not re.search(r"\b(?:THEN|ALORS)\b", line, re.IGNORECASE):
+            pending_when = only_when.group(1).strip()
+            continue
+        only_then = re.match(r"^\s*(?:[-*•]|\d+[.)])?\s*\**(?:THEN|ALORS)\b\**\s+(.+?)\s*$", line, re.IGNORECASE)
+        if only_then and pending_when:
+            criteria.append({"id": len(criteria) + 1, "status": "non testé",
+                             "scenario": f"QUAND {pending_when} ALORS {only_then.group(1).strip()}"})
+            last = len(criteria) - 1
+            pending_when = None
+            continue
         line_match = re.match(bold_single_line, line, re.IGNORECASE | re.MULTILINE)
         if line_match:
             when_part = line_match.group(1).strip()
