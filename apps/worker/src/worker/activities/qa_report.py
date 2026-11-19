@@ -53,6 +53,13 @@ def _extract_summary(spec_content: str) -> str:
 def _extract_acceptance_criteria(spec_content: str) -> list[dict]:
     """Extrait les critères d'acceptation sous forme de scénarios QUAND/ALORS ou WHEN/THEN.
     
+    Gère :
+    - Scénarios sur plusieurs lignes (QUAND...\nALORS...)
+    - Scénarios sur une seule ligne (- **WHEN** ... **THEN** ...)
+    - Puces (-, *, •)
+    - Gras (**)
+    - WHEN/THEN ou QUAND/ALORS
+    
     Retourne une liste de dicts avec 'id', 'scenario', 'status' ('non testé').
     """
     criteria = []
@@ -60,7 +67,7 @@ def _extract_acceptance_criteria(spec_content: str) -> list[dict]:
         return criteria
     
     # Chercher une section dédiée (## ou ###)
-    section_pattern = r"(?:#{2,3}\s*(?:Critères? d'(?:acceptation|accéptation)|Acceptance Criteria?|Scénarios?)\s*\n\n)(.+?)(?=\n\n#|\Z)"
+    section_pattern = r"(?:#{2,3}\s*(?:Critères? d'(?:acceptation|accéptation)|Acceptance Criteria?|Scénarios?)\s*\n+)(.+?)(?=\n\n#|\Z)"
     section_match = re.search(section_pattern, spec_content, re.DOTALL | re.IGNORECASE)
     
     if section_match:
@@ -68,41 +75,76 @@ def _extract_acceptance_criteria(spec_content: str) -> list[dict]:
     else:
         content = spec_content
     
-    # Extraire les scénarios QUAND...ALORS ou WHEN...THEN
-    # Pattern pour QUAND/ALORS sur des lignes consécutives
-    scenario_pattern = r"(?:^|\n)\s*(?:QUAND|WHEN)\s+(.+?)\s*\n\s*(?:ALORS|THEN)\s+(.+?)\s*(?=\n|$)"
-    scenarios = re.findall(scenario_pattern, content, re.DOTALL | re.IGNORECASE | re.MULTILINE)
+    # Pattern 1: Scénarios sur une seule ligne avec gras **WHEN**...**THEN**
+    # Ex: - **WHEN** x **THEN** y
+    bold_single_line = r"^\s*[-*•]\s*\*\*(?:WHEN|QUAND)\*\*(.+?)\*\*(?:THEN|ALORS)\*\*(.+?)\s*$"
     
-    for i, (when, then) in enumerate(scenarios, 1):
+    # Pattern 2: Scénarios sur une seule ligne sans gras mais avec WHEN/THEN
+    # Ex: - WHEN x THEN y
+    plain_single_line = r"^\s*[-*•]\s*(?:WHEN|QUAND)\s+(.+?)\s+(?:THEN|ALORS)\s+(.+?)\s*$"
+    
+    # Pattern 2b: Scénarios sur une seule ligne sans puce
+    # Ex: WHEN x THEN y
+    no_bullet_single_line = r"^\s*(?:WHEN|QUAND)\s+(.+?)\s+(?:THEN|ALORS)\s+(.+?)\s*$"
+    
+    # Pattern 3: Scénarios sur plusieurs lignes
+    multi_line_pattern = r"(?:^|\n)\s*(?:QUAND|WHEN)\s+(.+?)\s*\n\s*(?:ALORS|THEN)\s+(.+?)\s*(?=\n|$)"
+    
+    # Extraire les scénarios sur une seule ligne avec gras
+    for line in content.split("\n"):
+        line_match = re.match(bold_single_line, line, re.IGNORECASE | re.MULTILINE)
+        if line_match:
+            when_part = line_match.group(1).strip()
+            then_part = line_match.group(2).strip()
+            scenario_text = f"QUAND {when_part} ALORS {then_part}"
+            criteria.append({"id": len(criteria) + 1, "scenario": scenario_text, "status": "non testé"})
+            continue
+        
+        # Extraire les scénarios sur une seule ligne sans gras
+        line_match = re.match(plain_single_line, line, re.IGNORECASE | re.MULTILINE)
+        if line_match:
+            when_part = line_match.group(1).strip()
+            then_part = line_match.group(2).strip()
+            scenario_text = f"QUAND {when_part} ALORS {then_part}"
+            criteria.append({"id": len(criteria) + 1, "scenario": scenario_text, "status": "non testé"})
+            continue
+        
+        # Extraire les scénarios sur une seule ligne sans puce
+        line_match = re.match(no_bullet_single_line, line, re.IGNORECASE | re.MULTILINE)
+        if line_match:
+            when_part = line_match.group(1).strip()
+            then_part = line_match.group(2).strip()
+            scenario_text = f"QUAND {when_part} ALORS {then_part}"
+            criteria.append({"id": len(criteria) + 1, "scenario": scenario_text, "status": "non testé"})
+            continue
+    
+    # Extraire les scénarios sur plusieurs lignes
+    multi_line_scenarios = re.findall(multi_line_pattern, content, re.DOTALL | re.IGNORECASE | re.MULTILINE)
+    for when, then in multi_line_scenarios:
         scenario_text = f"QUAND {when.strip()} ALORS {then.strip()}"
-        criteria.append({
-            "id": i,
-            "scenario": scenario_text,
-            "status": "non testé"
-        })
+        criteria.append({"id": len(criteria) + 1, "scenario": scenario_text, "status": "non testé"})
     
-    # Si pas de scénarios trouvés, essayer de trouver des lignes avec QUAND/ALORS/WHEN/THEN
+    # Si toujours rien, essayer de trouver des paires WHEN/THEN ou QUAND/ALORS séparées
     if not criteria:
-        lines = content.split("\n")
+        lines_list = content.split("\n")
         current_when = None
-        for line in lines:
+        for line in lines_list:
             line = line.strip()
-            when_match = re.match(r"(?:QUAND|WHEN)\s+(.+)", line, re.IGNORECASE)
+            # Enlever les marqueurs markdown
+            line_clean = re.sub(r"^[-*•]\s*", "", line)
+            line_clean = re.sub(r"\*\*", "", line_clean)
+            
+            when_match = re.match(r"(?:QUAND|WHEN)\s+(.+)", line_clean, re.IGNORECASE)
             if when_match:
                 current_when = when_match.group(1).strip()
                 continue
-            then_match = re.match(r"(?:ALORS|THEN)\s+(.+)", line, re.IGNORECASE)
+            then_match = re.match(r"(?:ALORS|THEN)\s+(.+)", line_clean, re.IGNORECASE)
             if then_match and current_when:
                 scenario_text = f"QUAND {current_when} ALORS {then_match.group(1).strip()}"
-                criteria.append({
-                    "id": len(criteria) + 1,
-                    "scenario": scenario_text,
-                    "status": "non testé"
-                })
+                criteria.append({"id": len(criteria) + 1, "scenario": scenario_text, "status": "non testé"})
                 current_when = None
     
     return criteria
-
 
 def _extract_manual_test_steps(spec_content: str) -> list[str]:
     """Extrait les étapes de test manuel depuis SPEC.md.
@@ -161,42 +203,84 @@ def _extract_modified_files(diff_output: str) -> list[str]:
 def _format_test_results(test_results: dict) -> list[dict]:
     """Formate les résultats des tests pour le rapport.
     
+    Utilise d'abord test_results["passed"] et test_results["cmd"],
+    puis un résumé (nombre de tests passés/échoués) au lieu de lister chaque test.
+    
     test_results est le dict retourné par test_runner.run_tests()
     """
-    results = []
-    
+    # Cas 1: Aucun test exécuté
     if not test_results:
-        return [{"name": "Aucun test", "status": "⚠️ Aucun test automatique exécuté — test manuel obligatoire"}]
+        return [{"status": "⚠️ Aucun test automatique exécuté — test manuel obligatoire"}]
     
+    # Cas 2: Tests non exécutables
     if test_results.get("unrunnable"):
-        return [{"name": "Tests", "status": "⚠️ Aucun test automatique exécuté — test manuel obligatoire"}]
+        return [{"status": "⚠️ Aucun test automatique exécuté — test manuel obligatoire"}]
     
-    if "log" in test_results:
-        log = test_results["log"]
-        # Parser les résultats de pytest
-        # Format: test_file::test_name PASSED/FAILED
-        passed_tests = []
-        failed_tests = []
+    # Cas 3: Utiliser passed/failed si disponibles (et que ce sont des entiers)
+    passed_count = test_results.get("passed")
+    failed_count = test_results.get("failed")
+    
+    # Si passed et failed sont des entiers (pas des booléens), les utiliser
+    if isinstance(passed_count, int) and isinstance(failed_count, int):
+        total = passed_count + failed_count
+        if total > 0:
+            if failed_count == 0:
+                return [{"status": f"✅ {total} test(s) passé(s)"}]
+            elif passed_count == 0:
+                return [{"status": f"❌ {total} test(s) échoué(s)"}]
+            else:
+                return [{"status": f"✅ {passed_count} passé(s), ❌ {failed_count} échoué(s)"}]
+    
+    # Cas 4: Parser le log pour pytest standard
+    log = test_results.get("log", "")
+    if log:
+        passed_tests = 0
+        failed_tests = 0
         
         for line in log.split("\n"):
             if " PASSED" in line and "test_" in line:
-                test_name = line.split(" PASSED")[0].strip()
-                if test_name and not test_name.startswith("==="):
-                    passed_tests.append(test_name)
+                passed_tests += 1
             elif " FAILED" in line and "test_" in line:
-                test_name = line.split(" FAILED")[0].strip()
-                if test_name and not test_name.startswith("==="):
-                    failed_tests.append(test_name)
+                failed_tests += 1
         
-        for test in passed_tests:
-            results.append({"name": test, "status": "✅ PASSED"})
-        for test in failed_tests:
-            results.append({"name": test, "status": "❌ FAILED"})
+        total = passed_tests + failed_tests
+        if total > 0:
+            if failed_tests == 0:
+                return [{"status": f"✅ {total} test(s) passé(s)"}]
+            elif passed_tests == 0:
+                return [{"status": f"❌ {total} test(s) échoué(s)"}]
+            else:
+                return [{"status": f"✅ {passed_tests} passé(s), ❌ {failed_tests} échoué(s)"}]
     
-    if not results:
-        results.append({"name": "Tests", "status": "⚠️ Aucun test automatique exécuté — test manuel obligatoire"})
+    # Cas 5: Parser cmd pour Jest (Tests: 12 passed, 12 total)
+    cmd = test_results.get("cmd", "")
+    if cmd:
+        # Jest: "Tests: 12 passed, 12 total"
+        jest_match = re.search(r"Tests:\s*(\d+)\s*passed,\s*(\d+)\s*total", cmd)
+        if jest_match:
+            passed = int(jest_match.group(1))
+            total = int(jest_match.group(2))
+            failed = total - passed
+            if failed == 0:
+                return [{"status": f"✅ {total} test(s) passé(s)"}]
+            else:
+                return [{"status": f"✅ {passed} passé(s), ❌ {failed} échoué(s)"}]
+        
+        # pytest -q: "8 passed in 0.5s" ou "2 failed, 8 passed in 0.5s"
+        pytest_q_match = re.search(r"(\d+)\s*passed", cmd)
+        pytest_q_fail_match = re.search(r"(\d+)\s*failed", cmd)
+        if pytest_q_match:
+            passed = int(pytest_q_match.group(1))
+            failed = int(pytest_q_fail_match.group(1)) if pytest_q_fail_match else 0
+            total = passed + failed
+            if total > 0:
+                if failed == 0:
+                    return [{"status": f"✅ {total} test(s) passé(s)"}]
+                else:
+                    return [{"status": f"✅ {passed} passé(s), ❌ {failed} échoué(s)"}]
     
-    return results
+    # Cas 6: Aucun test trouvé
+    return [{"status": "⚠️ Aucun test automatique exécuté — test manuel obligatoire"}]
 
 
 def format_qa_report(
@@ -258,7 +342,11 @@ def format_qa_report(
     lines.append("**Tests automatiques** :")
     if test_results_formatted:
         for test in test_results_formatted:
-            lines.append(f"- {test['name']} : {test['status']}")
+            # Si test a un 'name', utiliser l'ancien format, sinon juste le status
+            if 'name' in test:
+                lines.append(f"- {test['name']} : {test['status']}")
+            else:
+                lines.append(f"- {test['status']}")
     else:
         lines.append("- ⚠️ Aucun test automatique exécuté — test manuel obligatoire")
     lines.append("")
