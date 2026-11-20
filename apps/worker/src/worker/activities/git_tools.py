@@ -28,6 +28,7 @@ import asyncio
 import hashlib
 import json
 import os
+import shutil
 import re
 import subprocess
 import tempfile
@@ -252,11 +253,39 @@ async def _probe_remote_auth(repo: str) -> None:
         + (f" — {verdict}" if verdict else ""))
 
 
+KEEP_RUN_WORKSPACES = 5
+
+
+def _prune_run_workspaces(root: str, prefix: str, keep: int, current: str) -> list[str]:
+    """Supprime les clones par exécution les plus anciens (même repo), en gardant
+    les `keep` plus récents et le clone courant. Retourne les chemins supprimés."""
+    try:
+        entries = [os.path.join(root, d) for d in os.listdir(root) if d.startswith(prefix)]
+    except FileNotFoundError:
+        return []
+    others = sorted((p for p in entries if os.path.abspath(p) != os.path.abspath(current)
+                     and os.path.isdir(p)), key=os.path.getmtime, reverse=True)
+    removed = []
+    for path in others[max(keep - 1, 0):]:
+        shutil.rmtree(path, ignore_errors=True)
+        # worktrees associés (../worktrees/<nom du clone>)
+        shutil.rmtree(os.path.join(root, "worktrees", os.path.basename(path)), ignore_errors=True)
+        removed.append(path)
+    return removed
+
+
 @workflows.activity()
-async def ensure_workspace(repo: str) -> dict:
+async def ensure_workspace(repo: str, run_id: str = "") -> dict:
     """Si `repo` est une URL (GitLab/GitHub), clone le repo dans un workspace
     local (`pipeline_workspace`, défaut /tmp/pipeline-workspaces) et retourne le
-    chemin. Si c'est un chemin local, le retourne tel quel (mode local)."""
+    chemin. Si c'est un chemin local, le retourne tel quel (mode local).
+
+    `run_id` (fin de l'execution_id) -> un clone PROPRE PAR EXÉCUTION : avant,
+    toutes les exécutions d'un même repo partageaient un dossier (constat
+    TOOLLIVE-3611, exécution 003fd458 : la spec d'un ticket « infobulle » parlait
+    de la faute « reopenned » de TOOLLIVE-3607 — SPEC.md non suivi par git
+    survivait au `reset --hard`, et deux exécutions simultanées se mélangeaient).
+    Les anciens clones sont supprimés (on garde les `KEEP_RUN_WORKSPACES` plus récents)."""
     global _URL_TOKEN
     if not is_url(repo):
         return {"path": repo, "url": None}
@@ -269,7 +298,9 @@ async def ensure_workspace(repo: str) -> dict:
     digest = hashlib.md5(repo.encode()).hexdigest()[:8]
     root = _env("pipeline_workspace", "PIPELINE_WORKSPACE") \
         or os.path.join(tempfile.gettempdir(), "pipeline-workspaces")
-    dest = os.path.join(root, f"{name}-{digest}")
+    dest = os.path.join(root, f"{name}-{digest}" + (f"-{run_id}" if run_id else ""))
+    if run_id:
+        _prune_run_workspaces(root, f"{name}-{digest}-", keep=KEEP_RUN_WORKSPACES, current=dest)
     if os.path.isdir(os.path.join(dest, ".git")):
         await _sh(["git", "fetch", _authed_url(repo), "+refs/heads/*:refs/remotes/origin/*"],
                 dest, extra_env=_git_env())

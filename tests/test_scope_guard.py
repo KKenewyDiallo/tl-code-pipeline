@@ -147,3 +147,29 @@ def test_branche_release_deja_sur_le_remote(tmp_path):
     _git(work, "push", "-q", "origin", "HEAD:refs/heads/release/fix-typo")
     assert asyncio.run(git_tools.remote_branch_exists(str(work), "release/fix-typo"))["exists"]
     assert not asyncio.run(git_tools.remote_branch_exists(str(work), "release/autre"))["exists"]
+
+
+def test_nettoyage_des_anciens_clones(tmp_path):
+    """Un clone par exécution (constat TOOLLIVE-3611 : spec d'un autre ticket) ;
+    on garde les 5 plus récents + le courant, worktrees associés compris."""
+    import os
+    import time
+    root = tmp_path
+    paths = []
+    for i in range(8):
+        p = root / f"toollive-c8y-40b6d9e9-run{i}"
+        p.mkdir()
+        (root / "worktrees" / p.name).mkdir(parents=True)
+        os.utime(p, (time.time() - 100 + i, time.time() - 100 + i))
+        paths.append(p)
+    other_repo = root / "autre-repo-123-run0"
+    other_repo.mkdir()
+    current = paths[0]  # le plus ancien, mais c'est l'exécution en cours
+    removed = git_tools._prune_run_workspaces(str(root), "toollive-c8y-40b6d9e9-", 5, str(current))
+    left = sorted(p.name for p in root.iterdir() if p.name.startswith("toollive-c8y"))
+    assert current.name in left
+    assert len(left) == 5  # courant + 4 plus récents
+    assert {p.name for p in paths[4:]} <= set(left)
+    assert other_repo.exists()
+    assert not (root / "worktrees" / paths[1].name).exists()
+    assert len(removed) == 3
