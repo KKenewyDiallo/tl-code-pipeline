@@ -78,3 +78,28 @@ def doc_to_check_text(pages: list[dict]) -> str:
     for p in pages:
         lines.append(f"- [{p['title']}]({p['url']})" if p.get("url") else f"- {p['title']}")
     return "\n".join(lines)
+
+
+# ------------------------------------------------- lien MR <-> ticket JIRA ---
+# Comme les intégrations agents de code existantes (OpenAI Codex + Jira,
+# OpenHands, Jira Automation) : la CLÉ du ticket (ex. TOOLLIVE-3611, en
+# majuscules) dans le nom de branche, le titre de la MR et les commits, pour que
+# JIRA relie tout seul la MR au ticket (panneau « Développement »).
+
+def release_branch(key: str, change_id: str) -> str:
+    if not key:
+        return f"release/{change_id}"
+    key = key.upper()
+    slug = re.sub(rf"^{re.escape(key)}[-_]?", "", change_id, flags=re.IGNORECASE).strip("-_")
+    return f"release/{key}-{slug}" if slug else f"release/{key}"
+
+
+def mr_title(key: str, summary: str, change_id: str) -> str:
+    if not key:
+        return f"[{change_id}] pipeline spec-to-tests"
+    clean = re.sub(r"^\s*\[[^\]]*\]\s*", "", summary or "").strip() or change_id
+    return f"{key.upper()} {clean}"[:200]
+
+
+def commit_message(key: str, message: str) -> str:
+    return f"{key.upper()} {message}" if key else message
