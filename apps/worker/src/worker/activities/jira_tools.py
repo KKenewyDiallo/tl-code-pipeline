@@ -483,12 +483,26 @@ async def jira_transition_done(issue_key: str,
 # pipeline n'écrit jamais dans Confluence ; il cite les pages liées au ticket
 # (contexte pour l'agent spec, et « doc à vérifier » dans le rapport QA).
 
-def confluence_query(summary: str) -> str:
-    """Texte de recherche à partir du titre du ticket : sans préfixe [..], sans
-    guillemets (injection CQL), 100 caractères max."""
+# Mots trop généraux pour chercher une doc (constat exécution 7c326e83 : le
+# titre entier « Faute d'orthographe reopenned dans l'historique des devis
+# (anglais) » ne trouvait aucune page — CQL `text ~` exige tous les mots).
+_STOPWORDS = set("""
+le la les un une des du de d l au aux et ou en dans sur pour par avec sans
+ne pas plus que qui quoi est sont a the an of in on for to with and or is are
+faute fautes orthographe typo bug bogue erreur probleme problème test adlc vrai
+anglais francais français english french espagnol portugais chinois langue
+page affiche affichage texte libelle libellé quand alors when then
+""".split())
+
+
+def confluence_query(summary: str, max_words: int = 3) -> str:
+    """Mots-clés de recherche tirés du titre du ticket : sans préfixe [..], sans
+    guillemets (injection CQL), sans mots vides ni mots trop généraux ; les
+    `max_words` premiers mots significatifs (CQL `text ~` exige tous les mots)."""
     text = re.sub(r"\[[^\]]*\]", " ", summary or "")
-    text = re.sub(r"[\"'«»“”\\]", " ", text)
-    return re.sub(r"\s+", " ", text).strip()[:100]
+    text = re.sub(r"[\"'«»“”\\()]", " ", text)
+    words = [w for w in re.findall(r"[\w/-]+", text) if len(w) > 2 and w.lower() not in _STOPWORDS]
+    return " ".join(words[:max_words])[:100]
 
 
 def _confluence_pages(result: Any, limit: int) -> list[dict]:
@@ -530,7 +544,10 @@ async def _confluence_search(jira: ToolCallClient, summary: str, limit: int) -> 
     # Serveur MCP v2 (mcp.atlassian.com/v2) : `searchConfluence` exige `cql`
     # (constat exécution 65fe3c32 : « Invalid arguments for tool searchConfluence:
     # Required at cql ») ; v1 : `searchConfluenceUsingCql`, mêmes arguments.
-    cql = f'type = page AND text ~ "{query}"'
+    # Un mot-clé suffit à remonter une page (OR) : un mot absent de la doc (ex. la
+    # faute « reopenned » elle-même) ne doit pas tout bloquer ; les pages qui
+    # contiennent le plus de mots sortent en premier (tri par pertinence).
+    cql = "type = page AND (" + " OR ".join(f'text ~ "{w}"' for w in query.split()) + ")"
     attempts = [
         ("searchConfluence", {"cloudId": cloud_id(), "cql": cql, "limit": limit}),
         ("searchConfluenceUsingCql", {"cloudId": cloud_id(), "cql": cql, "limit": limit}),

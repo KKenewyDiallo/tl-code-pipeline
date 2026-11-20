@@ -7,8 +7,16 @@ from worker.activities import jira_text, jira_tools
 
 def test_requete_nettoyee():
     q = jira_tools.confluence_query('[Test ADLC - vrai bug] Faute « reopenned » dans l\'historique "devis"')
-    assert q == "Faute reopenned dans l historique devis"
+    assert q == "reopenned historique devis"
     assert '"' not in q and "[" not in q
+
+
+def test_requete_cas_reel_7c326e83():
+    """Le titre complet ne trouvait aucune page : on ne garde que des mots-clés."""
+    q = jira_tools.confluence_query(
+        "[Test ADLC - vrai bug] Faute d'orthographe « reopenned » dans l'historique des devis (anglais)")
+    assert q == "reopenned historique devis"
+    assert jira_tools.confluence_query("Statuts OEM : devis prestataire") == "Statuts OEM devis"
 
 
 def test_pages_format_v1_cql():
@@ -79,4 +87,4 @@ def test_cql_toujours_envoye(monkeypatch):
     assert res == {"ok": True, "pages": []}
     tool, args = seen[0]
     assert tool == "searchConfluence"
-    assert args["cql"] == 'type = page AND text ~ "Faute reopenned"'
+    assert args["cql"] == 'type = page AND (text ~ "reopenned")'
