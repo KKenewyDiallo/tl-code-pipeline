@@ -124,6 +124,45 @@ def test_fetch_issue_not_found_raises():
         asyncio.run(jt._fetch_issue(stub, "NOPE-1"))
 
 
+def test_fetch_issue_unwraps_v2_data_envelope():
+    """Cas prod : exécution 0138f8a4...a2a9c / run 01a1effa-ca7a-773e-ada1-335119a7aae7
+    (2026-11-18T18:45Z) — le connecteur atlassian_49bb (serveur MCP v2) enveloppe le
+    ticket dans {"data": {...}} : getJiraIssue renvoie bien TOOLLIVE-3601 (id 62981)
+    mais « key » n'est pas au premier niveau ; l'ancien code levait un faux
+    « introuvable ou illisible » et tuait le run."""
+    v2 = {"data": {"appliedContentFormat": "markdown", "id": "62981", "key": "TOOLLIVE-3601",
+                   "fields": {"summary": "[Test ADLC] Le nombre d'assets n'est pas bon",
+                              "description": "Remplacer «50000 connected assets» par «90000+ connected assets»",
+                              "status": {"name": "new", "statusCategory": {"name": "To Do"}},
+                              "assignee": None, "priority": {"name": "Medium"}, "labels": []}}}
+    stub = StubClient({"getJiraIssue": v2})
+    out = asyncio.run(jt._fetch_issue(stub, "TOOLLIVE-3601"))
+    assert out["key"] == "TOOLLIVE-3601"
+    assert out["id"] == "62981"
+    assert out["summary"] == "[Test ADLC] Le nombre d'assets n'est pas bon"
+    assert out["status"] == "new"
+    assert out["url"].endswith("/browse/TOOLLIVE-3601")
+
+
+def test_fetch_issue_wrapped_error_still_fatal():
+    stub = StubClient({"getJiraIssue": {"data": {"errorMessages": ["Issue does not exist"]}}})
+    with pytest.raises(RuntimeError, match="introuvable"):
+        asyncio.run(jt._fetch_issue(stub, "NOPE-1"))
+
+
+def test_search_unwraps_v2_data_envelope():
+    stub = StubClient({"searchJiraIssuesUsingJql": {"data": {"issues": [ISSUE]}}})
+    out = asyncio.run(jt._search(stub, "key = TOOLLIVE-3600", 5))
+    assert out[0]["key"] == "TOOLLIVE-3600" and out[0]["status"] == "new"
+
+
+def test_transition_unwraps_v2_data_envelope():
+    stub = StubClient({"getTransitionsForJiraIssue": {"data": TRANSITIONS},
+                      "transitionJiraIssue": {}})
+    out = asyncio.run(jt._transition(stub, "TOOLLIVE-3600", "code-review"))
+    assert out["ok"] is True and out["to"] == "code-review"
+
+
 class FakeGatewayError(Exception):
     """Simule une SDKError de la gateway connecteurs (status_code + body)."""
 
@@ -173,8 +212,11 @@ class FakeMcpToolError(Exception):
         self.details = (response,)
 
 
-def _mcp_error_response(message: str):
-    return {"content": [{"type": "text", "text": json.dumps({"error": True, "message": message})}]}
+def _mcp_error_response(message: str, status_code: int | None = None):
+    payload = {"error": True, "message": message}
+    if status_code is not None:
+        payload["statusCode"] = status_code
+    return {"content": [{"type": "text", "text": json.dumps(payload)}]}
 
 
 def test_fetch_issue_soft_on_mcp_api_token_permission_error():
@@ -189,6 +231,31 @@ def test_fetch_issue_soft_on_mcp_api_token_permission_error():
     assert out["ok"] is False
     assert out["reason"] == "connector_unavailable"
     assert "api token" in out["error"].lower()
+
+
+def test_fetch_issue_soft_on_mcp_insufficient_scopes_error():
+    """Cas prod : exécution 0138f8a4...c2740 / run 01a1ef8e-f451-75d8-b273-e66aae99cec2
+    (2026-11-18T16:48Z) — la gateway répond 200 mais le tool getJiraIssue du connecteur
+    atlassian_49bb (01a1ef7f-0488-7652-934c-83b2eca95331) renvoie dans son contenu
+    403 « Insufficient scopes for "getJiraIssue". Required: [read:jira:agent-interface].
+    Use discover to find endpoints you have access to. » : le run doit continuer sans
+    le ticket (JIRA ne tue jamais le pipeline)."""
+    stub = StubClient({}, errors={"getJiraIssue": FakeMcpToolError(_mcp_error_response(
+        'Insufficient scopes for "getJiraIssue". Required: [read:jira:agent-interface]. '
+        "Use discover to find endpoints you have access to.", status_code=403))})
+    out = asyncio.run(jt._fetch_issue_or_unavailable(stub, "TOOLLIVE-3602"))
+    assert out["ok"] is False
+    assert out["reason"] == "connector_unavailable"
+    assert "insufficient scopes" in out["error"].lower()
+
+
+def test_fetch_issue_still_fatal_on_issue_level_403_mcp_error():
+    """Une 403 au niveau du ticket (et non des scopes du connecteur) reste fatale :
+    seul « insufficient scope » est traité comme connecteur indisponible."""
+    stub = StubClient({}, errors={"getJiraIssue": FakeMcpToolError(_mcp_error_response(
+        "Issue does not exist or you do not have permission to see it.", status_code=403))})
+    with pytest.raises(FakeMcpToolError):
+        asyncio.run(jt._fetch_issue_or_unavailable(stub, "NOPE-1"))
 
 
 def test_fetch_issue_still_fatal_on_issue_level_mcp_error():
@@ -236,6 +303,47 @@ def test_call_reraises_when_tool_has_no_fallback():
     with pytest.raises(FakeGatewayError):
         asyncio.run(jt._call(stub, "getJiraIssue", cloudId="x", issueIdOrKey="NOPE-1"))
     assert [c[0] for c in stub.calls] == ["getJiraIssue"]
+
+
+def test_call_falls_back_on_mcp_unknown_tool_content_error():
+    """Cas prod : exécution 0138f8a4...b2363 / run 01a1f00d-42f0-7593-8576-dbf2d3a55e33
+    (2026-11-18T19:06:23Z) — la gateway répond 200 mais le serveur MCP v2 renvoie
+    « Unknown tool: 'getTransitionsForJiraIssue' » DANS le contenu du tool
+    (ConnectorToolCallError, texte dans `details`) : le fallback v2 doit se
+    déclencher (listJiraIssueTransitions)."""
+    unknown = FakeMcpToolError({"content": [
+        {"type": "text", "text": "Unknown tool: 'getTransitionsForJiraIssue'"}]})
+    stub = StubClient({"listJiraIssueTransitions": TRANSITIONS},
+                      errors={"getTransitionsForJiraIssue": unknown})
+    out = asyncio.run(jt._call(stub, "getTransitionsForJiraIssue",
+                               cloudId="toollive.atlassian.net", issueIdOrKey="TOOLLIVE-3601"))
+    assert out == TRANSITIONS
+    assert [c[0] for c in stub.calls] == ["getTransitionsForJiraIssue", "listJiraIssueTransitions"]
+
+
+def test_comment_falls_back_on_mcp_unknown_tool_content_error():
+    """Idem pour addCommentToJiraIssue -> addOrEditJiraIssueComment (même exécution,
+    19:06:25Z) : le commentaire doit être posté via le nom v2."""
+    unknown = FakeMcpToolError({"content": [
+        {"type": "text", "text": "Unknown tool: 'addCommentToJiraIssue'"}]})
+    stub = StubClient({"addOrEditJiraIssueComment": {"id": "1"}},
+                      errors={"addCommentToJiraIssue": unknown})
+    out = asyncio.run(jt._comment(stub, "TOOLLIVE-3601", "hello"))
+    assert out == {"ok": True}
+    assert [c[0] for c in stub.calls] == ["addCommentToJiraIssue", "addOrEditJiraIssueComment"]
+
+
+def test_call_no_fallback_on_other_mcp_content_error():
+    """Une erreur MCP dans le contenu qui n'est PAS « unknown tool » (ex. erreur au
+    niveau du ticket) ne doit pas déclencher le fallback vers le nom v2."""
+    err = FakeMcpToolError({"content": [
+        {"type": "text", "text": "Issue does not exist or you do not have permission to see it."}]})
+    stub = StubClient({"listJiraIssueTransitions": TRANSITIONS},
+                      errors={"getTransitionsForJiraIssue": err})
+    with pytest.raises(FakeMcpToolError):
+        asyncio.run(jt._call(stub, "getTransitionsForJiraIssue",
+                             cloudId="x", issueIdOrKey="NOPE-1"))
+    assert [c[0] for c in stub.calls] == ["getTransitionsForJiraIssue"]
 
 
 def test_transition_accepts_bare_list_response():

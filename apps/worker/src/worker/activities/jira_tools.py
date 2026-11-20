@@ -40,6 +40,11 @@ s'authentifie auprès de mcp.atlassian.com avec un API token refusé par l'org
 (exécution `0138f8a4...767f50`, run `01a1ef65-f20c-728a-957f-da137a617e40`,
 2026-11-18T16:03Z) : `_is_connector_unavailable` inspecte `str(exc)` ET le texte des
 `details` de l'exception.
+Même traitement quand le tool renvoie une erreur de scopes insuffisants (403
+« Insufficient scopes for "getJiraIssue". Required: [read:jira:agent-interface] » —
+credential résolu sur le connecteur `atlassian_49bb` sans le scope demandé ;
+exécution `0138f8a4...c2740`, run `01a1ef8e-f451-75d8-b273-e66aae99cec2`,
+2026-11-18T16:48Z) : marqueur « insufficient scope ».
 
 Outils MCP utilisés (connecteur Atlassian) :
 - lecture  : getJiraIssue, searchJiraIssuesUsingJql, getTransitionsForJiraIssue
@@ -169,13 +174,29 @@ def _blocks_text(dumped: Any) -> str:
     return "\n".join(parts)
 
 
+def _unwrap_data_envelope(parsed: Any) -> Any:
+    """Développe l'enveloppe `{"data": ...}` du serveur MCP v2 d'Atlassian
+    (mcp.atlassian.com/v2/mcp) : getJiraIssue y renvoie le ticket sous
+    `{"data": {"appliedContentFormat": ..., "id": ..., "key": ..., "fields": ...}}`
+    (cas prod exécution `0138f8a4...a2a9c` / run `01a1effa-ca7a-773e-ada1-335119a7aae7` où le
+    ticket TOOLLIVE-3601 était bien présent mais déclaré « introuvable » car `key` n'était
+    pas au premier niveau). On ne développe que quand `data` est la seule clé,
+    pour ne jamais déballer un payload d'erreur (`errorMessages`, `error`, ...)."""
+    if (isinstance(parsed, dict) and set(parsed) == {"data"}
+            and isinstance(parsed["data"], (dict, list))):
+        return parsed["data"]
+    return parsed
+
+
 def _parse_tool_result(dumped: Any) -> Any:
-    """Résultat d'un call_tool : JSON parsé si le texte est du JSON, sinon texte brut."""
+    """Résultat d'un call_tool : JSON parsé (enveloppe `data` développée) si le
+    texte est du JSON, sinon texte brut."""
     text = _blocks_text(dumped)
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
     except (json.JSONDecodeError, TypeError):
         return text
+    return _unwrap_data_envelope(parsed)
 
 
 # Le serveur MCP v2 d'Atlassian (mcp.atlassian.com/v2/mcp — ex. connecteur custom
@@ -189,11 +210,15 @@ _TOOL_FALLBACKS = {
 
 
 def _is_unknown_tool(exc: BaseException) -> bool:
-    """Vrai si la gateway répond que l'outil demandé n'existe pas sur le connecteur."""
+    """Vrai si l'outil demandé n'existe pas sur le connecteur : 404 de la gateway
+    (« Tool ... not found ») OU erreur MCP renvoyée DANS le contenu du tool avec un
+    HTTP 200 de la gateway (serveur v2 : « Unknown tool: '<nom>' » ; cas prod exécution
+    `0138f8a4...b2363` / run `01a1f00d-42f0-7593-8576-dbf2d3a55e33` — le texte est dans
+    `details` de la ConnectorToolCallError, invisible dans str(exc), d'où `_exc_text`)."""
     if getattr(exc, "status_code", None) == 404 and "tool" in str(exc).lower():
         return True
-    msg = str(exc).lower()
-    return "tool" in msg and "not found" in msg
+    msg = _exc_text(exc).lower()
+    return ("tool" in msg and "not found" in msg) or "unknown tool" in msg
 
 
 async def _call(jira: ToolCallClient, tool: str, **arguments: Any) -> Any:
@@ -273,6 +298,8 @@ _CONNECTOR_UNAVAILABLE_MARKERS = (
     "authentication failed",
     "authentication required",
     "not authenticated",
+    "insufficient scope",
+    "use discover to find endpoints you have access to",
 )
 
 
@@ -305,8 +332,12 @@ def _is_connector_unavailable(exc: BaseException) -> bool:
     API token. Please ask your organization admin for access. » quand le connecteur
     `atlassian_94e0` s'authentifie auprès de mcp.atlassian.com avec un API token refusé
     par l'org (exécution `0138f8a4...767f50`, run
-    `01a1ef65-f20c-728a-957f-da137a617e40`, 2026-11-18T16:03Z). Un ticket introuvable
-    (mauvaise clé) reste fatal."""
+    `01a1ef65-f20c-728a-957f-da137a617e40`, 2026-11-18T16:03Z). Même traitement pour
+    une erreur de scopes insuffisants renvoyée dans le contenu du tool (403
+    « Insufficient scopes for "getJiraIssue". Required: [read:jira:agent-interface] » —
+    credential résolu sur le connecteur `atlassian_49bb` sans le scope demandé ;
+    exécution `0138f8a4...c2740`, run `01a1ef8e-f451-75d8-b273-e66aae99cec2`,
+    2026-11-18T16:48Z). Un ticket introuvable (mauvaise clé) reste fatal."""
     if getattr(exc, "status_code", None) in (401, 403):
         return True
     msg = _exc_text(exc).lower()
