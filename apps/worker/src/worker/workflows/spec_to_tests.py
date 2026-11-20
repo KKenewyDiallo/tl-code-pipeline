@@ -228,7 +228,8 @@ class SpecToTests:
                 await jira_tools.jira_comment(
                     jira_key,
                     jira_text.start_text(issue["key"], issue["summary"], execution_id,
-                                         bool(start.get("ok"))),
+                                         bool(start.get("ok")),
+                                         start.get("to") or start.get("transition") or ""),
                 )
 
         # Mode « reprendre une MR en cours » : la demande contient « MR <iid> »

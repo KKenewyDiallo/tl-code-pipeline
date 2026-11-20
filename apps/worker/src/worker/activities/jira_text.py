@@ -26,10 +26,13 @@ def strip_technical(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", out).strip()
 
 
-def start_text(key: str, summary: str, execution_id: str, transition_ok: bool) -> str:
+def start_text(key: str, summary: str, execution_id: str, transition_ok: bool,
+               new_status: str = "") -> str:
     lines = [f"🤖 Le pipeline traite ce ticket ({key} — {summary}).",
              f"Suivi dans {STUDIO}, exécution `{execution_id[-8:]}`."]
-    if not transition_ok:
+    if transition_ok and new_status:
+        lines.append(f"Statut passé à « {new_status} ».")
+    elif not transition_ok:
         lines.append("Statut du ticket non modifié (détail dans Studio).")
     return "\n".join(lines)
 

@@ -49,3 +49,8 @@ def test_diff_retiree():
     out = jira_text.strip_technical(payload)
     assert "diff --git" not in out and "@@" not in out and "+++ b/x" not in out
     assert "Lien" in out and "Tests:" in out
+
+
+def test_demarrage_statut_change():
+    t = jira_text.start_text("TOOLLIVE-3611", "Infobulle", EXEC, True, "devs-en-cours")
+    assert "Statut passé à « devs-en-cours »." in t

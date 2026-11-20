@@ -279,11 +279,54 @@ def test_comment_ok_and_non_blocking_error():
 
 
 def test_transition_by_name():
-    stub = StubClient({"getTransitionsForJiraIssue": TRANSITIONS, "transitionJiraIssue": {}})
+    """Serveur v2 en premier : listJiraIssueTransitions puis transitionJiraIssue(transitionId)."""
+    stub = StubClient({"listJiraIssueTransitions": TRANSITIONS, "transitionJiraIssue": {}})
     out = asyncio.run(jt._transition(stub, "TOOLLIVE-3600", "code-review"))
     assert out["ok"] is True and out["to"] == "code-review"
     tool, args = stub.calls[1]
-    assert tool == "transitionJiraIssue" and args["transition"] == {"id": "61"}
+    assert tool == "transitionJiraIssue" and args["transitionId"] == "61"
+
+
+def test_transition_v1_si_v2_absent():
+    stub = StubClient({"getTransitionsForJiraIssue": TRANSITIONS, "transitionJiraIssue": {}},
+                      errors={"listJiraIssueTransitions": RuntimeError("Unknown tool")})
+    out = asyncio.run(jt._transition(stub, "TOOLLIVE-3600", "code-review"))
+    assert out["ok"] is True
+    assert stub.calls[0][0] == "listJiraIssueTransitions"
+    assert "getTransitionsForJiraIssue" in [c[0] for c in stub.calls]
+
+
+def test_transition_nom_souple_et_statut_toollive():
+    """« devs-en-cours » trouvé par le statut d'arrivée ; « Devs en cours » aussi."""
+    stub = StubClient({"listJiraIssueTransitions": TRANSITIONS, "transitionJiraIssue": {}})
+    out = asyncio.run(jt._transition(stub, "TOOLLIVE-3611", "Devs en cours"))
+    assert out["ok"] is True and out["to"] == "devs-en-cours"
+
+
+def test_transition_indisponible_liste_les_statuts():
+    stub = StubClient({"listJiraIssueTransitions": TRANSITIONS})
+    out = asyncio.run(jt._transition(stub, "TOOLLIVE-3611", "Done"))
+    assert out["ok"] is False
+    assert "disponibles : code-review, devs-en-cours" in out["reason"]
+
+
+def test_transition_erreur_complete_conservee():
+    """Constat 3601-3611 : « connector tool call failed » sans la raison."""
+    class Err(Exception):
+        details = [{"content": [{"type": "text", "text": "MCP error -32602: Required at transitionId"}]}]
+
+    stub = StubClient({"listJiraIssueTransitions": TRANSITIONS},
+                      errors={"transitionJiraIssue": Err("connector tool call failed")})
+    out = asyncio.run(jt._transition(stub, "TOOLLIVE-3611", "code-review"))
+    assert out["ok"] is False and "Required at transitionId" in out["error"]
+
+
+def test_statut_de_demarrage_par_defaut(monkeypatch):
+    monkeypatch.delenv("jira_transition_start", raising=False)
+    monkeypatch.delenv("JIRA_TRANSITION_START", raising=False)
+    assert jt.start_transition_name() == "devs-en-cours"
+    monkeypatch.setenv("jira_transition_start", "Pris en charge")
+    assert jt.start_transition_name() == "Pris en charge"
 
 
 def test_call_falls_back_to_v2_tool_name():
@@ -373,8 +416,7 @@ def test_transition_falls_back_to_v2_transition_id():
     stub = V2Stub()
     out = asyncio.run(jt._transition(stub, "TOOLLIVE-3600", "code-review"))
     assert out["ok"] is True and out["to"] == "code-review"
-    assert [c[0] for c in stub.calls] == ["getTransitionsForJiraIssue", "transitionJiraIssue",
-                                          "transitionJiraIssue"]
+    assert [c[0] for c in stub.calls] == ["listJiraIssueTransitions", "transitionJiraIssue"]
     assert stub.transition_args[-1]["transitionId"] == "61"
 
 

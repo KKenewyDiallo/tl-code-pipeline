@@ -136,7 +136,7 @@ notification via `open_approval` (webhook `approval_webhook_url`).
   reste fatale.
 - Env (minuscules, fallback majuscules) : `jira_base_url` (défaut
   `https://toollive.atlassian.net/jira`), `jira_cloud_id` (UUID ou host du site),
-  `jira_transition_start` (défaut « In Progress »), `jira_transition_review`
+  `jira_transition_start` (défaut « devs-en-cours »), `jira_transition_review`
   (défaut « code-review »), `jira_transition_done` (défaut vide = aucune),
   `jira_credentials_name` (nom du credential épinglé par le slot connecteur ;
   vide par défaut = credential par défaut du caller), `jira_connector_name`
