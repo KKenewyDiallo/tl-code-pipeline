@@ -54,3 +54,18 @@ def test_diff_retiree():
 def test_demarrage_statut_change():
     t = jira_text.start_text("TOOLLIVE-3611", "Infobulle", EXEC, True, "devs-en-cours")
     assert "Statut passé à « devs-en-cours »." in t
+
+
+def test_branche_titre_commit_avec_cle_jira():
+    """La clé du ticket (majuscules) relie la MR au ticket dans JIRA."""
+    assert jira_text.release_branch("TOOLLIVE-3611", "oem-status-quote-request-button-tooltip") == \
+        "release/TOOLLIVE-3611-oem-status-quote-request-button-tooltip"
+    # change_id qui commence déjà par la clé (en minuscules) : pas de doublon
+    assert jira_text.release_branch("TOOLLIVE-3601", "toollive-3601-about-us-connected-assets-90000") == \
+        "release/TOOLLIVE-3601-about-us-connected-assets-90000"
+    assert jira_text.release_branch("", "fix-x") == "release/fix-x"
+    assert jira_text.mr_title("TOOLLIVE-3611", "[Test ADLC] Statuts OEM : infobulle", "x") == \
+        "TOOLLIVE-3611 Statuts OEM : infobulle"
+    assert jira_text.mr_title("", "", "fix-x") == "[fix-x] pipeline spec-to-tests"
+    assert jira_text.commit_message("toollive-3611", "task t1: infobulle") == "TOOLLIVE-3611 task t1: infobulle"
+    assert jira_text.commit_message("", "task t1") == "task t1"

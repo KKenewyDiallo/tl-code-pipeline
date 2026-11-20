@@ -100,6 +100,8 @@ class SpecToTests:
         self.pending_question: str | None = None
         self.plan_note: str = ""
         self.confluence_pages: list[dict] = []
+        self.jira_ref: str = ""      # clé du ticket lu (branche, titre MR, commits)
+        self.jira_summary: str = ""
         self.conversation: list[dict] = []
         self.replies: int = 0
 
@@ -211,6 +213,7 @@ class SpecToTests:
                     f"Assigné: {issue['assignee'] or '-'}\n\n"
                     f"Description du ticket :\n{issue['description'] or '(vide)'}"
                     + (f"\n\nCommentaires existants :\n{comments_txt}" if comments_txt else ""))
+                self.jira_ref, self.jira_summary = issue["key"], issue["summary"]
                 conf = await jira_tools.confluence_search(issue["summary"])
                 self.confluence_pages = conf.get("pages") or []
                 if self.confluence_pages:
@@ -422,7 +425,7 @@ class SpecToTests:
         final = await test_runner.run_tests(repo)
         diff = await git_tools.diff_against_base(repo)
         base = diff["base"]
-        release_branch = f"release/{change_id}"
+        release_branch = jira_text.release_branch(self.jira_ref, change_id)
         mr = {"mr": None}
         if mr_info:
             # MR en cours : on push les fusions sur SA branche source (fast-forward)
@@ -442,7 +445,7 @@ class SpecToTests:
                                    "la CI de cette MR.")
             mr = await git_tools.open_merge_request(
                 repo_url, release_branch, base,
-                title=f"[{change_id}] pipeline spec-to-tests",
+                title=jira_text.mr_title(self.jira_ref, self.jira_summary, change_id),
                 description=mr_description,
             )
         push_target = ((await git_tools.current_branch(repo))["branch"] if repo_url
@@ -517,7 +520,8 @@ class SpecToTests:
             fix_context = (f"Retour de review sur {review_link} (branche courante « {push_target} » "
                            f"):\n{feedback}\nCorrige le code en conséquence sans rien casser d'autre.")
             await agent_runner.run_agent_activity("dev", fix_context, "dev", repo)
-            await git_tools.commit_all(repo, f"review {review_round + 1}: applique le retour de review")
+            await git_tools.commit_all(repo, jira_text.commit_message(
+                self.jira_ref, f"review {review_round + 1}: applique le retour de review"))
             final = await test_runner.run_tests(repo)
             if repo_url:
                 await git_tools.push_branch(repo, push_target)
@@ -546,7 +550,8 @@ class SpecToTests:
 
         for iteration in range(MAX_DEV_ITERATIONS):
             await agent_runner.run_agent_activity("dev", context, "dev", wt["worktree"])
-            await git_tools.commit_all(wt["worktree"], f"task {task['id']}: {task['title']}")
+            await git_tools.commit_all(wt["worktree"], jira_text.commit_message(
+                self.jira_ref, f"task {task['id']}: {task['title']}"))
             await agent_runner.run_agent_activity("tester", context, "dev", wt["worktree"])
             result = await test_runner.run_tests(wt["worktree"])
             if result["passed"]:
