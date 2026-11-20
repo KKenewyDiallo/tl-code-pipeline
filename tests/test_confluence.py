@@ -45,7 +45,7 @@ def test_repli_sur_le_second_outil(monkeypatch):
     client = FakeClient(fail_first=True)
     res = asyncio.run(jira_tools._confluence_search(client, "Faute reopenned", 3))
     assert res["ok"] and res["pages"][0]["title"] == "Doc devis"
-    assert client.calls == ["searchConfluenceUsingCql", "searchConfluence"]
+    assert client.calls == ["searchConfluence", "searchConfluenceUsingCql"]
 
 
 def test_jamais_bloquant(monkeypatch):
@@ -63,3 +63,20 @@ def test_note_doc_aval():
     assert jira_text.doc_to_check_text([]) == ""
     t = jira_text.doc_to_check_text([{"title": "Guide devis", "url": "https://x/1"}])
     assert "📚" in t and "[Guide devis](https://x/1)" in t
+
+
+def test_cql_toujours_envoye(monkeypatch):
+    """Constat 65fe3c32 : searchConfluence (v2) exige l'argument `cql`."""
+    monkeypatch.setattr(jira_tools, "cloud_id", lambda: "cid")
+    seen = []
+
+    class Client:
+        async def call_tool(self, tool_name, arguments):
+            seen.append((tool_name, arguments))
+            return {"content": [{"type": "text", "text": '{"results": []}'}]}
+
+    res = asyncio.run(jira_tools._confluence_search(Client(), "Faute reopenned", 3))
+    assert res == {"ok": True, "pages": []}
+    tool, args = seen[0]
+    assert tool == "searchConfluence"
+    assert args["cql"] == 'type = page AND text ~ "Faute reopenned"'
