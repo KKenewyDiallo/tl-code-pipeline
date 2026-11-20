@@ -390,8 +390,15 @@ def _transition_items(result: Any) -> list:
         for key in ("transitions", "values", "results", "items"):
             if isinstance(result.get(key), list):
                 return result[key]
+        for key in ("result", "data", "issue"):  # enveloppes executeRead / getJiraIssue
+            if isinstance(result.get(key), (dict, list)):
+                inner = _transition_items(result[key])
+                if inner:
+                    return inner
         return []
-    return result if isinstance(result, list) else []
+    if isinstance(result, list) and all(isinstance(t, dict) and "id" in t for t in result):
+        return result
+    return []
 
 
 async def _call_variants(jira: ToolCallClient, tools: tuple[str, ...],
@@ -411,6 +418,45 @@ async def _call_variants(jira: ToolCallClient, tools: tuple[str, ...],
     raise RuntimeError(" | ".join(errors)[:1500])
 
 
+async def _list_transitions(jira: ToolCallClient, cid: str, issue_key: str) -> list:
+    """Transitions possibles du ticket. Le serveur MCP v2 (connecteur atlassian_49bb)
+    n'expose PAS d'outil direct pour les lister (constat exécution 41167b17 :
+    « Unknown tool: 'listJiraIssueTransitions' » et « 'getTransitionsForJiraIssue' »),
+    alors que transitionJiraIssue demande un transitionId. Trois voies, dans l'ordre :
+    1. outils directs (connecteur builtin v1 / futurs serveurs) ;
+    2. getJiraIssue avec `expand=transitions` (paramètre standard de l'API REST
+       Jira : la réponse contient alors `transitions`) ;
+    3. opération `listJiraIssueTransitions` via l'outil générique `executeRead`
+       du serveur v2 (« execute-family tool for read operations »).
+    Toutes les erreurs sont gardées (dans l'exception finale)."""
+    errors: list[str] = []
+    attempts = [
+        (("listJiraIssueTransitions", "getTransitionsForJiraIssue"),
+         [{"cloudId": cid, "issueIdOrKey": issue_key}, {"cloudId": cid, "issueKey": issue_key}]),
+        (("getJiraIssue",),
+         [{"cloudId": cid, "issueIdOrKey": issue_key, "expand": "transitions", "fields": ["status"]},
+          {"cloudId": cid, "issueIdOrKey": issue_key, "expand": "transitions"}]),
+        (("executeRead",),
+         [{"name": "listJiraIssueTransitions",
+           "inputs": {"cloudId": cid, "issueIdOrKey": issue_key}},
+          {"operation": "listJiraIssueTransitions",
+           "arguments": {"cloudId": cid, "issueIdOrKey": issue_key}},
+          {"name": "listJiraIssueTransitions",
+           "input": {"cloudId": cid, "issueIdOrKey": issue_key}}]),
+    ]
+    for tools, variants in attempts:
+        try:
+            result, _ = await _call_variants(jira, tools, variants)
+        except Exception as exc:
+            errors.append(str(exc))
+            continue
+        items = _transition_items(result)
+        if items:
+            return items
+        errors.append(f"{tools[0]} : réponse sans transitions ({str(result)[:200]})")
+    raise RuntimeError(" || ".join(errors)[:3000])
+
+
 async def _transition(jira: ToolCallClient, issue_key: str, transition_name: str) -> dict:
     """Transition de statut par NOM (ex. « devs-en-cours », « code-review ») :
     liste les transitions possibles du ticket, choisit celle dont le nom ou le
@@ -421,12 +467,9 @@ async def _transition(jira: ToolCallClient, issue_key: str, transition_name: str
         return {"ok": False, "reason": "nom de transition vide"}
     cid = cloud_id()
     try:
-        listed, _ = await _call_variants(
-            jira, ("listJiraIssueTransitions", "getTransitionsForJiraIssue"),
-            [{"cloudId": cid, "issueIdOrKey": issue_key}, {"cloudId": cid, "issueKey": issue_key}])
+        items = await _list_transitions(jira, cid, issue_key)
     except Exception as exc:
         return {"ok": False, "error": f"lecture des transitions : {exc}"[:1500]}
-    items = _transition_items(listed)
     wanted = _norm_status(transition_name)
     match = next((t for t in items if isinstance(t, dict) and wanted in {
         _norm_status(t.get("name")), _norm_status((t.get("to") or {}).get("name"))}), None)

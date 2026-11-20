@@ -480,3 +480,39 @@ def test_entrypoint_accepts_jira_issue():
     params = inspect.signature(fn).parameters
     assert "jira_issue" in params
     assert params["jira_issue"].default == ""
+
+
+def test_transitions_via_getjiraissue_expand():
+    """Constat 41167b17 : ni listJiraIssueTransitions ni getTransitionsForJiraIssue
+    n'existent sur le connecteur v2 -> getJiraIssue(expand=transitions)."""
+    unknown = RuntimeError("connector tool call failed\nUnknown tool")
+    issue = {"key": "TOOLLIVE-3611", "fields": {"status": {"name": "Nouveau"}},
+             "transitions": TRANSITIONS["transitions"]}
+    stub = StubClient({"getJiraIssue": issue, "transitionJiraIssue": {}},
+                      errors={"listJiraIssueTransitions": unknown, "getTransitionsForJiraIssue": unknown})
+    out = asyncio.run(jt._transition(stub, "TOOLLIVE-3611", "devs-en-cours"))
+    assert out["ok"] is True and out["to"] == "devs-en-cours"
+    get_calls = [a for t, a in stub.calls if t == "getJiraIssue"]
+    assert get_calls[0]["expand"] == "transitions"
+    assert [a for t, a in stub.calls if t == "transitionJiraIssue"][0]["transitionId"] == "21"
+
+
+def test_transitions_via_executeread():
+    unknown = RuntimeError("Unknown tool")
+    stub = StubClient({"getJiraIssue": {"key": "TOOLLIVE-3611", "fields": {}},
+                       "executeRead": {"result": TRANSITIONS}, "transitionJiraIssue": {}},
+                      errors={"listJiraIssueTransitions": unknown, "getTransitionsForJiraIssue": unknown})
+    out = asyncio.run(jt._transition(stub, "TOOLLIVE-3611", "code-review"))
+    assert out["ok"] is True
+    ex = [a for t, a in stub.calls if t == "executeRead"][0]
+    assert ex["name"] == "listJiraIssueTransitions"
+
+
+def test_transitions_toutes_les_voies_echouent_message_complet():
+    unknown = RuntimeError("Unknown tool")
+    stub = StubClient({}, errors={t: unknown for t in (
+        "listJiraIssueTransitions", "getTransitionsForJiraIssue", "getJiraIssue", "executeRead")})
+    out = asyncio.run(jt._transition(stub, "TOOLLIVE-3611", "code-review"))
+    assert out["ok"] is False
+    for tool in ("listJiraIssueTransitions", "getJiraIssue", "executeRead"):
+        assert tool in out["error"]
