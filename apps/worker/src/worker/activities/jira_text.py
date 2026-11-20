@@ -64,3 +64,14 @@ def gate_fallback_text(subject: str, payload: str) -> str:
     """Pour les autres alertes (timeouts, escalades) : sujet + texte nettoyé."""
     body = strip_technical(payload)
     return f"🔔 {subject}" + (f"\n\n{body[:1500]}" if body else "") + f"\n\nDétail dans {STUDIO}."
+
+
+def doc_to_check_text(pages: list[dict]) -> str:
+    """Aval : pages Confluence à relire / compléter après le changement (le
+    pipeline n'écrit pas dans Confluence ; un humain décide)."""
+    if not pages:
+        return ""
+    lines = ["📚 Documentation Confluence peut-être à mettre à jour :"]
+    for p in pages:
+        lines.append(f"- [{p['title']}]({p['url']})" if p.get("url") else f"- {p['title']}")
+    return "\n".join(lines)

@@ -99,6 +99,7 @@ class SpecToTests:
         self.phase: str = "init"
         self.pending_question: str | None = None
         self.plan_note: str = ""
+        self.confluence_pages: list[dict] = []
         self.conversation: list[dict] = []
         self.replies: int = 0
 
@@ -210,6 +211,13 @@ class SpecToTests:
                     f"Assigné: {issue['assignee'] or '-'}\n\n"
                     f"Description du ticket :\n{issue['description'] or '(vide)'}"
                     + (f"\n\nCommentaires existants :\n{comments_txt}" if comments_txt else ""))
+                conf = await jira_tools.confluence_search(issue["summary"])
+                self.confluence_pages = conf.get("pages") or []
+                if self.confluence_pages:
+                    ticket_block += "\n\nPages Confluence liées (base de connaissances — à " \
+                        "prendre en compte si pertinent) :\n" + "\n".join(
+                            f"- {p['title']} {p['url']}" + (f" — {p['excerpt']}" if p["excerpt"] else "")
+                            for p in self.confluence_pages)
                 request = f"{ticket_block}\n\nDemande initiale :\n{request}"
                 start = await jira_tools.jira_transition_start(jira_key)
                 start_note = (f"Statut passé à « {start.get('to') or start.get('transition')} »."
@@ -458,7 +466,8 @@ class SpecToTests:
             )
             # Notes utiles regroupées dans CE commentaire (un seul commentaire
             # de fin au lieu de 3-4) : plan regroupé, fichiers hors plan, statut.
-            for note in (self.plan_note, out_note, rev_note):
+            doc_note = jira_text.doc_to_check_text(self.confluence_pages)
+            for note in (self.plan_note, out_note, rev_note, doc_note):
                 if note:
                     qa_report += f"\n\n{note}"
             qa_report += f"\n\nÀ valider dans {jira_text.STUDIO} (« approve », « reject » ou retour de review)."
