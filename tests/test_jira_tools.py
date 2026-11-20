@@ -270,7 +270,7 @@ def test_fetch_issue_still_fatal_on_issue_level_mcp_error():
 def test_comment_ok_and_non_blocking_error():
     stub = StubClient({"addCommentToJiraIssue": {"id": "1"}})
     out = asyncio.run(jt._comment(stub, "TOOLLIVE-3600", "hello"))
-    assert out == {"ok": True}
+    assert out == {"ok": True, "id": "1"}
     _, args = stub.calls[0]
     assert args["commentBody"] == "hello" and args["contentFormat"] == "markdown"
     failing = StubClient({}, fail_on=("addCommentToJiraIssue",))
@@ -372,7 +372,7 @@ def test_comment_falls_back_on_mcp_unknown_tool_content_error():
     stub = StubClient({"addOrEditJiraIssueComment": {"id": "1"}},
                       errors={"addCommentToJiraIssue": unknown})
     out = asyncio.run(jt._comment(stub, "TOOLLIVE-3601", "hello"))
-    assert out == {"ok": True}
+    assert out == {"ok": True, "id": "1"}
     assert [c[0] for c in stub.calls] == ["addCommentToJiraIssue", "addOrEditJiraIssueComment"]
 
 
@@ -516,3 +516,39 @@ def test_transitions_toutes_les_voies_echouent_message_complet():
     assert out["ok"] is False
     for tool in ("listJiraIssueTransitions", "getJiraIssue", "executeRead"):
         assert tool in out["error"]
+
+
+# ------------------------------------------- commentaire « Suivi » vivant ---
+
+def test_comment_edit_passe_le_comment_id():
+    stub = StubClient({"addOrEditJiraIssueComment": {"id": "777"}})
+    out = asyncio.run(jt._comment(stub, "TOOLLIVE-3611", "v2", comment_id="777"))
+    assert out == {"ok": True, "id": "777"}
+    tool, args = stub.calls[0]
+    assert tool == "addOrEditJiraIssueComment"
+    assert args["commentId"] == "777" and args["commentBody"] == "v2"
+
+
+def test_comment_id_formes_de_reponse():
+    assert jt._comment_id({"id": 12}) == "12"
+    assert jt._comment_id({"comment": {"id": "34"}}) == "34"
+    assert jt._comment_id({"data": {"id": "56"}}) == "56"
+    assert jt._comment_id("Comment 98765 added to TOOLLIVE-3611") == "98765"
+    assert jt._comment_id({"ok": True}) == ""
+
+
+def test_follow_cree_puis_modifie():
+    stub = StubClient({"addCommentToJiraIssue": {"id": "500"},
+                       "addOrEditJiraIssueComment": {"id": "500"}})
+    first = asyncio.run(jt._follow_comment(stub, "TOOLLIVE-3611", "v1"))
+    assert first == {"ok": True, "id": "500", "edited": False}
+    second = asyncio.run(jt._follow_comment(stub, "TOOLLIVE-3611", "v2", first["id"]))
+    assert second == {"ok": True, "id": "500", "edited": True}
+    assert [c[0] for c in stub.calls] == ["addCommentToJiraIssue", "addOrEditJiraIssueComment"]
+
+
+def test_follow_edition_impossible_recree_un_commentaire():
+    stub = StubClient({"addCommentToJiraIssue": {"id": "501"}},
+                      fail_on=("addOrEditJiraIssueComment",))
+    out = asyncio.run(jt._follow_comment(stub, "TOOLLIVE-3611", "v2", "500"))
+    assert out == {"ok": True, "id": "501", "edited": False}

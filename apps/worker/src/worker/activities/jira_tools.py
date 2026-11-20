@@ -368,14 +368,41 @@ async def _search(jira: ToolCallClient, jql: str, max_results: int) -> list:
     return [_brief(i) for i in issues or []]
 
 
-async def _comment(jira: ToolCallClient, issue_key: str, body: str) -> dict:
-    """Poste un commentaire markdown. NON bloquant : en cas d'erreur, retourne
-    {"ok": False, "error": ...} sans faire échouer le pipeline."""
+def _comment_id(result: Any) -> str:
+    """Identifiant du commentaire créé, quelle que soit la forme de la réponse
+    ({"id": ...}, {"comment": {"id": ...}}, texte « Comment 12345 ... »)."""
+    if isinstance(result, dict):
+        if result.get("id") not in (None, ""):
+            return str(result["id"])
+        for key in ("comment", "data", "result"):
+            found = _comment_id(result.get(key))
+            if found:
+                return found
+    if isinstance(result, str):
+        m = re.search(r"comment\D{0,20}?(\d+)", result, re.IGNORECASE)
+        if m:
+            return m.group(1)
+    return ""
+
+
+async def _comment(jira: ToolCallClient, issue_key: str, body: str,
+                   comment_id: str = "") -> dict:
+    """Poste un commentaire markdown, ou MODIFIE le commentaire `comment_id`
+    (addOrEditJiraIssueComment : « omit commentId to add, or pass one to edit »).
+    Retourne {"ok": True, "id": <id du commentaire>}. NON bloquant : en cas
+    d'erreur, retourne {"ok": False, "error": ...} sans faire échouer le pipeline."""
     try:
-        await _call(jira, "addCommentToJiraIssue",
-                    cloudId=cloud_id(), issueIdOrKey=issue_key,
-                    commentBody=body, contentFormat="markdown")
-        return {"ok": True}
+        if comment_id:
+            result = _parse_tool_result(await jira.call_tool(
+                tool_name="addOrEditJiraIssueComment",
+                arguments={"cloudId": cloud_id(), "issueIdOrKey": issue_key,
+                           "commentId": comment_id, "commentBody": body,
+                           "contentFormat": "markdown"}))
+            return {"ok": True, "id": _comment_id(result) or comment_id}
+        result = await _call(jira, "addCommentToJiraIssue",
+                             cloudId=cloud_id(), issueIdOrKey=issue_key,
+                             commentBody=body, contentFormat="markdown")
+        return {"ok": True, "id": _comment_id(result)}
     except Exception as exc:
         return {"ok": False, "error": str(exc)[:300]}
 
@@ -517,6 +544,26 @@ async def jira_comment(issue_key: str, body: str,
     """Poste un commentaire markdown sur le ticket (addCommentToJiraIssue).
     Non bloquant pour le pipeline (voir _comment)."""
     return await _comment(jira, issue_key, body)
+
+
+async def _follow_comment(jira: ToolCallClient, issue_key: str, body: str,
+                          comment_id: str = "") -> dict:
+    if comment_id:
+        out = await _comment(jira, issue_key, body, comment_id)
+        if out.get("ok"):
+            return {**out, "edited": True}
+    out = await _comment(jira, issue_key, body)
+    return {**out, "edited": False}
+
+
+@workflows.activity()
+async def jira_follow(issue_key: str, body: str, comment_id: str = "",
+                      jira: ToolCallClient = Depends(atlassian_connector)) -> dict:
+    """Commentaire « Suivi » vivant : créé une fois, puis MODIFIÉ à chaque étape
+    (au lieu d'un nouveau commentaire par étape). Si la modification échoue
+    (commentaire supprimé, outil v1 sans édition), en crée un nouveau.
+    Non bloquant. Retourne {"ok", "id", "edited"}."""
+    return await _follow_comment(jira, issue_key, body, comment_id)
 
 
 @workflows.activity()

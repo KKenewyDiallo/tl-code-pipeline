@@ -104,6 +104,15 @@ class SpecToTests:
         self.jira_summary: str = ""
         self.conversation: list[dict] = []
         self.replies: int = 0
+        # Commentaire JIRA « Suivi » vivant (un seul, modifié à chaque étape)
+        self.execution_id: str = ""
+        self.follow_id: str = ""
+        self.follow_steps: dict = jira_text.new_follow_steps()
+        self.follow_status: str = ""
+        self.follow_mr: str = ""
+        self.follow_detail: str = ""
+        self.follow_end: str = ""
+        self.follow_noid: bool = False
 
     @workflows.workflow.signal(name="approve")
     async def on_approve(self) -> None:
@@ -171,18 +180,47 @@ class SpecToTests:
             return
         text = jira_text.gate_fallback_text(subject, payload) if jira_comment is None else jira_comment
         if text:
-            await jira_tools.jira_comment(jira_key, text)
+            await self._follow(jira_key, detail=text)
+
+    async def _follow(self, jira_key: str, steps: dict | None = None,
+                      detail: str | None = None, end: str | None = None) -> None:
+        """Met à jour LE commentaire « Suivi » du ticket (créé au 1er appel,
+        modifié ensuite) au lieu de poster un commentaire par étape.
+        No-op sans ticket lié ; non bloquant."""
+        if not jira_key:
+            return
+        if steps:
+            self.follow_steps.update(steps)
+        if detail is not None:
+            self.follow_detail = detail
+        if end is not None:
+            self.follow_end = end
+        if self.follow_noid and not (detail or end):
+            # Pas d'identifiant de commentaire (édition impossible) : on ne poste
+            # que l'utile (question, spec, conclusion) — jamais un commentaire
+            # par simple changement d'étape.
+            return
+        body = jira_text.follow_text(
+            self.jira_ref or jira_key, self.jira_summary, self.execution_id,
+            self.follow_steps, self.follow_status, self.follow_mr,
+            self.follow_detail, self.follow_end)
+        out = await jira_tools.jira_follow(jira_key, body, self.follow_id)
+        if out.get("ok"):
+            self.follow_id = out.get("id") or ""
+            self.follow_noid = not self.follow_id
 
     async def _jira_note(self, jira_key: str, text: str) -> None:
-        """Commentaire JIRA de progression (no-op sans ticket lié)."""
-        if jira_key:
-            await jira_tools.jira_comment(jira_key, text)
+        """Fin anticipée (rejet, timeout, escalade) : l'étape en cours passe en
+        ❌ et la conclusion s'affiche dans le commentaire « Suivi »."""
+        failed = {k: "failed" for k, v in self.follow_steps.items() if v in ("current", "wait")}
+        await self._follow(jira_key, steps=failed, detail="", end=text)
 
     @workflows.workflow.entrypoint
     async def run(self, repo: str, request: str, jira_issue: str = "") -> dict:
         # ------------------------------------------------------------------
         # 0. WORKSPACE — URL (GitLab/GitHub) -> clone local ; sinon chemin local
         execution_id = workflows.get_execution_id()
+        self.execution_id = execution_id
         ws = await git_tools.ensure_workspace(repo, execution_id[-8:])
         repo, repo_url = ws["path"], ws["url"]
 
@@ -228,12 +266,9 @@ class SpecToTests:
                               else f"Transition de démarrage non appliquée "
                                    f"({start.get('reason') or start.get('error', 'inconnue')}).")
                 self.conversation.append({"role": "agent", "text": f"[jira] {start_note}"})
-                await jira_tools.jira_comment(
-                    jira_key,
-                    jira_text.start_text(issue["key"], issue["summary"], execution_id,
-                                         bool(start.get("ok")),
-                                         start.get("to") or start.get("transition") or ""),
-                )
+                self.follow_status = jira_text.follow_status_note(
+                    bool(start.get("ok")), start.get("to") or start.get("transition") or "")
+                await self._follow(jira_key, steps={"ticket": "done", "spec": "current"})
 
         # Mode « reprendre une MR en cours » : la demande contient « MR <iid> »
         # (ex. "repars de la MR 1585 : ...") -> on fetch la branche source de la MR
@@ -320,6 +355,8 @@ class SpecToTests:
                         f"en pause (transcript : `python scripts/status.py {execution_id}`).")
                     return {"status": "timeout_spec_interview", "jira_issue": jira_key or None,
                             "conversation": self.conversation}
+                if self.follow_detail:
+                    await self._follow(jira_key, detail="")
                 if self.verdict == "reject":
                     await self._jira_note(jira_key, "❌ Run rejeté pendant l'interview spec.")
                     return {"status": "rejected_at_spec", "change_id": None,
@@ -339,6 +376,7 @@ class SpecToTests:
         # ------------------------------------------------------------------
         # 2. GATE HUMAINE — l'humain relit proposal.md + specs/
         self.phase = "gate_spec"
+        self.follow_steps["spec"] = "wait"
         spec_read = await git_tools.read_spec(repo) if jira_key else {}
         await self._gate(
             jira_comment=jira_text.spec_ready_text(spec_read.get("content", "")
@@ -355,6 +393,7 @@ class SpecToTests:
                 f"❌ SPEC.md rejetée à la gate de validation (change_id `{change_id}`).")
             return {"status": "rejected_at_spec", "change_id": change_id,
                     "jira_issue": jira_key or None}
+        await self._follow(jira_key, steps={"spec": "done", "dev": "current"}, detail="")
 
         # ------------------------------------------------------------------
         # 3. AGENT PLANNER — tasks.md -> tâches unitaires avec dépendances
@@ -476,6 +515,15 @@ class SpecToTests:
                     qa_report += f"\n\n{note}"
             qa_report += f"\n\nÀ valider dans {jira_text.STUDIO} (« approve », « reject » ou retour de review)."
             await jira_tools.jira_comment(jira_key, qa_report)
+            mr_url = (mr.get("mr") or {}).get("web_url") or ""
+            self.follow_mr = mr_url
+            if rev.get("ok"):
+                self.follow_status = jira_text.follow_status_note(
+                    True, rev.get("to") or rev.get("transition") or "")
+            await self._follow(
+                jira_key,
+                steps={"dev": "done", "mr": "done" if mr_url else "failed", "review": "wait"},
+                detail="📋 Rapport pour la QA posté ci-dessous.")
 
         # ------------------------------------------------------------------
         # 6. GATE REVIEW — un signal `reply` = retour de review : le pipeline
@@ -498,12 +546,12 @@ class SpecToTests:
                 self.phase = "done"
                 if jira_key:
                     done = await jira_tools.jira_transition_done(jira_key)
-                    done_note = (f" Statut passé à « {done.get('to') or done.get('transition')} »."
-                                 if done.get("ok") else "")
-                    await jira_tools.jira_comment(
-                        jira_key,
-                        f"✅ Review approuvée — MR : {(mr.get('mr') or {}).get('web_url')}"
-                        f"{done_note} (merge manuel sur le forge).")
+                    if done.get("ok"):
+                        self.follow_status = jira_text.follow_status_note(
+                            True, done.get("to") or done.get("transition") or "")
+                    await self._follow(
+                        jira_key, steps={"review": "done"}, detail="",
+                        end="✅ Review approuvée — merge manuel sur le forge.")
                 return {"status": "mr_opened", "change_id": change_id,
                         "jira_issue": jira_key or None,
                         "mr": (mr.get("mr") or {}).get("web_url"), "tests": final}

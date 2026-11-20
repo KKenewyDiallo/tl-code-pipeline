@@ -80,6 +80,58 @@ def doc_to_check_text(pages: list[dict]) -> str:
     return "\n".join(lines)
 
 
+# ------------------------------------------------- commentaire « Suivi » ---
+# Constat (TOOLLIVE-3607) : une vingtaine de commentaires sur un ticket (4 par
+# exécution, à chaque relance). Comme les intégrations sérieuses (OpenAI Codex +
+# Jira : un seul commentaire), le pipeline tient UN commentaire « Suivi » qu'il
+# MODIFIE à chaque étape (addOrEditJiraIssueComment + commentId), plus le
+# Rapport pour la QA à la fin : 2 commentaires maximum par exécution.
+
+FOLLOW_STEPS = (("ticket", "Ticket lu"), ("spec", "Spec"), ("dev", "Développement"),
+                ("mr", "MR"), ("review", "Review"))
+FOLLOW_ICONS = {"done": "✅", "current": "⏳", "wait": "👀", "todo": "⬜", "failed": "❌"}
+
+
+def new_follow_steps() -> dict:
+    return {key: "todo" for key, _ in FOLLOW_STEPS}
+
+
+def follow_text(key: str, summary: str, execution_id: str, steps: dict,
+                status_note: str = "", mr_url: str = "", detail: str = "",
+                end_note: str = "") -> str:
+    """Commentaire « Suivi » : en-tête, checklist des étapes, puis le détail
+    de l'étape en cours (question, spec à valider...) et la conclusion."""
+    head = f"🤖 **Pipeline sur {key}**" + (f" — {summary}" if summary else "")
+    lines = [head, f"Exécution `{execution_id[-8:]}` dans {STUDIO}."]
+    if status_note:
+        lines.append(status_note)
+    checklist = []
+    for step, label in FOLLOW_STEPS:
+        state = steps.get(step, "todo")
+        text = label
+        if step == "mr" and mr_url:
+            text = f"[MR]({mr_url})"
+        if state == "current":
+            text += "…"
+        elif state == "wait":
+            text += " (à valider)"
+        checklist.append(f"{FOLLOW_ICONS.get(state, '⬜')} {text}")
+    lines += ["", " · ".join(checklist)]
+    if detail:
+        lines += ["", strip_technical(detail)[:3000]]
+    if end_note:
+        lines += ["", end_note]
+    return "\n".join(lines)
+
+
+def follow_status_note(transition_ok: bool, new_status: str = "") -> str:
+    if transition_ok and new_status:
+        return f"Statut passé à « {new_status} »."
+    if not transition_ok:
+        return "Statut du ticket non modifié (détail dans Studio)."
+    return ""
+
+
 # ------------------------------------------------- lien MR <-> ticket JIRA ---
 # Comme les intégrations agents de code existantes (OpenAI Codex + Jira,
 # OpenHands, Jira Automation) : la CLÉ du ticket (ex. TOOLLIVE-3611, en
