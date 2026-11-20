@@ -180,9 +180,9 @@ class SpecToTests:
     async def run(self, repo: str, request: str, jira_issue: str = "") -> dict:
         # ------------------------------------------------------------------
         # 0. WORKSPACE — URL (GitLab/GitHub) -> clone local ; sinon chemin local
-        ws = await git_tools.ensure_workspace(repo)
-        repo, repo_url = ws["path"], ws["url"]
         execution_id = workflows.get_execution_id()
+        ws = await git_tools.ensure_workspace(repo, execution_id[-8:])
+        repo, repo_url = ws["path"], ws["url"]
 
         # ------------------------------------------------------------------
         # 0b. TICKET JIRA (optionnel) — lu via le connecteur MCP `atlassian` :
