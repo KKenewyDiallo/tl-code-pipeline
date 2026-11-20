@@ -41,6 +41,7 @@ with wf.unsafe.imports_passed_through():
     from worker.activities.qa_report import format_qa_report
     from worker.activities.scope_guard import modified_files, plan_hints, scope_note
     from worker.activities.plan_guard import consolidate_tasks, plan_note
+    from worker.activities import jira_text
 
 GATE_TIMEOUT = timedelta(hours=24)
 
@@ -156,13 +157,18 @@ class SpecToTests:
         return "", feedback
 
     async def _gate(self, subject: str, payload: str, execution_id: str,
-                    jira_key: str) -> None:
+                    jira_key: str, jira_comment: str | None = None) -> None:
         """Notification humaine (webhook open_approval) + commentaire JIRA sur le
-        ticket lié s'il y en a un."""
+        ticket lié. `jira_comment` = texte lisible pour JIRA ; None = sujet +
+        payload nettoyé des commandes/chemins/diff ; "" = rien dans JIRA (le
+        détail technique reste dans Studio)."""
         await test_runner.open_approval(subject=subject, payload=payload,
                                         execution_id=execution_id)
-        if jira_key:
-            await jira_tools.jira_comment(jira_key, f"🔔 *{subject}*\n\n{payload[:2000]}")
+        if not jira_key:
+            return
+        text = jira_text.gate_fallback_text(subject, payload) if jira_comment is None else jira_comment
+        if text:
+            await jira_tools.jira_comment(jira_key, text)
 
     async def _jira_note(self, jira_key: str, text: str) -> None:
         """Commentaire JIRA de progression (no-op sans ticket lié)."""
@@ -210,13 +216,11 @@ class SpecToTests:
                               if start.get("ok")
                               else f"Transition de démarrage non appliquée "
                                    f"({start.get('reason') or start.get('error', 'inconnue')}).")
+                self.conversation.append({"role": "agent", "text": f"[jira] {start_note}"})
                 await jira_tools.jira_comment(
                     jira_key,
-                    f"🤖 Pipeline `spec-to-tests` démarré sur {issue['key']} — {issue['summary']}"
-                    f" (exécution `{execution_id}`, repo `{repo_url or repo}`)\n{start_note}\n"
-                    f"Suivi : `python scripts/status.py {execution_id}` — gates : "
-                    f"`python scripts/approve.py {execution_id} approve|reject` — réponses à "
-                    f"l'agent spec : `python scripts/talk.py {execution_id} \"...\"`",
+                    jira_text.start_text(issue["key"], issue["summary"], execution_id,
+                                         bool(start.get("ok"))),
                 )
 
         # Mode « reprendre une MR en cours » : la demande contient « MR <iid> »
@@ -277,6 +281,7 @@ class SpecToTests:
                 self.conversation.append({"role": "agent", "text": question})
                 await self._gate(
                     subject=f"Question de l'agent spec (tour {round_no})",
+                    jira_comment=jira_text.question_text(question),
                     payload=(f"{question}\n\nRéponds à l'agent : python scripts/talk.py "
                              f"{execution_id} \"ta réponse\"\nForcer la finalisation : "
                              f"python scripts/approve.py {execution_id} approve\n"
@@ -322,7 +327,10 @@ class SpecToTests:
         # ------------------------------------------------------------------
         # 2. GATE HUMAINE — l'humain relit proposal.md + specs/
         self.phase = "gate_spec"
+        spec_read = await git_tools.read_spec(repo) if jira_key else {}
         await self._gate(
+            jira_comment=jira_text.spec_ready_text(spec_read.get("content", "")
+                                                   if spec_read.get("ok") else ""),
             subject=f"Spec à valider: {change_id}",
             payload=f"Spec à valider : {repo}/SPEC.md — réponds "
                     f"`approve` ou `reject` (python scripts/approve.py {execution_id} "
@@ -366,8 +374,6 @@ class SpecToTests:
         planned = tasks
         tasks = consolidate_tasks(tasks)
         self.plan_note = plan_note(planned, tasks)
-        if jira_key and self.plan_note:
-            await jira_tools.jira_comment(jira_key, self.plan_note)
         by_id = {t["id"]: t for t in tasks}
 
         # ------------------------------------------------------------------
@@ -431,8 +437,6 @@ class SpecToTests:
         review_link = (mr["mr"] or {}).get("web_url") or f"{repo} (diff vs {base})"
         hints = plan_hints(tasks)
         out_note = scope_note(modified_files(diff["diff"]), hints)
-        if jira_key and out_note:
-            await jira_tools.jira_comment(jira_key, out_note)
         if jira_key:
             rev = await jira_tools.jira_transition_review(jira_key)
             rev_note = (f" Statut passé à « {rev.get('to') or rev.get('transition')} »."
@@ -443,13 +447,17 @@ class SpecToTests:
             # Formater le rapport QA
             qa_report = format_qa_report(
                 spec_content=spec_content,
-                review_link=review_link,
+                review_link=(review_link if review_link.startswith("http")
+                             else "MR non créée — voir l'exécution dans Mistral Studio"),
                 diff_output=diff.get("diff", ""),
                 test_results=final,
             )
-            # Ajouter la note de statut si présente
-            if rev_note:
-                qa_report += f"\n\n{rev_note}"
+            # Notes utiles regroupées dans CE commentaire (un seul commentaire
+            # de fin au lieu de 3-4) : plan regroupé, fichiers hors plan, statut.
+            for note in (self.plan_note, out_note, rev_note):
+                if note:
+                    qa_report += f"\n\n{note}"
+            qa_report += f"\n\nÀ valider dans {jira_text.STUDIO} (« approve », « reject » ou retour de review)."
             await jira_tools.jira_comment(jira_key, qa_report)
 
         # ------------------------------------------------------------------
@@ -464,6 +472,8 @@ class SpecToTests:
                          f"\n\n`approve` = validé, `reject` = rejeté, tout autre message (`reply`) "
                          f"= retour de review traité par le pipeline (correction + re-push)."),
                 execution_id=execution_id, jira_key=jira_key,
+                jira_comment="" if review_round == 0 else jira_text.review_fix_text(
+                    review_round, (mr.get("mr") or {}).get("web_url")),
             )
             consumed = len(self.conversation)
             verdict, feedback = await self._wait_review_verdict(consumed)
