@@ -343,6 +343,14 @@ async def merge_branch(repo: str, branch: str) -> dict:
 
 
 @workflows.activity()
+async def remote_branch_exists(repo: str, branch: str) -> dict:
+    """La branche existe-t-elle déjà sur le remote `origin` ? (constat TOOLLIVE-3607 :
+    relance sur un ticket déjà traité -> même change_id -> push non fast-forward)."""
+    res = await _sh(["git", "ls-remote", "--heads", "origin", branch], repo)
+    return {"exists": res["code"] == 0 and bool(res["output"].strip())}
+
+
+@workflows.activity()
 async def create_branch(repo: str, branch: str) -> dict:
     return await _sh(["git", "checkout", "-b", branch], repo)
 

@@ -420,6 +420,10 @@ class SpecToTests:
             await git_tools.push_branch(repo, mr_info["source_branch"])
             mr = {"mr": {"iid": mr_info["iid"], "web_url": mr_info["web_url"]}}
         elif repo_url:
+            # Branche déjà présente sur le forge (relance du même ticket : même
+            # change_id) -> nom unique, sinon push refusé (non fast-forward).
+            if (await git_tools.remote_branch_exists(repo, release_branch))["exists"]:
+                release_branch = f"{release_branch}-{execution_id[-6:]}"
             await git_tools.create_branch(repo, release_branch)
             await git_tools.push_branch(repo, release_branch)
             mr_description = diff["diff"][:4000]
