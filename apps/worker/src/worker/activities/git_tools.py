@@ -346,8 +346,16 @@ async def merge_branch(repo: str, branch: str) -> dict:
 async def remote_branch_exists(repo: str, branch: str) -> dict:
     """La branche existe-t-elle déjà sur le remote `origin` ? (constat TOOLLIVE-3607 :
     relance sur un ticket déjà traité -> même change_id -> push non fast-forward)."""
-    res = await _sh(["git", "ls-remote", "--heads", "origin", branch], repo)
-    return {"exists": res["code"] == 0 and bool(res["output"].strip())}
+    # `origin` est l'URL NETTOYÉE (sans PAT) : sur un GitLab privé, ls-remote
+    # échoue sans authentification -> même URL authentifiée que push_branch.
+    url = (await _sh(["git", "config", "remote.origin.url"], repo))["output"].strip()
+    res = await _sh(["git", "ls-remote", "--heads", _authed_url(url), branch],
+                    repo, extra_env=_git_env())
+    if res["code"] != 0:
+        # Dans le doute (réseau, droits), on considère qu'elle existe : un nom
+        # unique ne coûte rien, un push refusé coûte toute l'exécution.
+        return {"exists": True, "error": _scrub(res["output"])[:300]}
+    return {"exists": bool(res["output"].strip())}
 
 
 @workflows.activity()
