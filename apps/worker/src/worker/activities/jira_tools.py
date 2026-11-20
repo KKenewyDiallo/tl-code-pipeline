@@ -527,10 +527,13 @@ async def _confluence_search(jira: ToolCallClient, summary: str, limit: int) -> 
     query = confluence_query(summary)
     if not query:
         return {"ok": False, "error": "titre vide", "pages": []}
+    # Serveur MCP v2 (mcp.atlassian.com/v2) : `searchConfluence` exige `cql`
+    # (constat exécution 65fe3c32 : « Invalid arguments for tool searchConfluence:
+    # Required at cql ») ; v1 : `searchConfluenceUsingCql`, mêmes arguments.
+    cql = f'type = page AND text ~ "{query}"'
     attempts = [
-        ("searchConfluenceUsingCql", {"cloudId": cloud_id(), "limit": limit,
-                                      "cql": f'type = page AND text ~ "{query}"'}),
-        ("searchConfluence", {"cloudId": cloud_id(), "query": query, "limit": limit}),
+        ("searchConfluence", {"cloudId": cloud_id(), "cql": cql, "limit": limit}),
+        ("searchConfluenceUsingCql", {"cloudId": cloud_id(), "cql": cql, "limit": limit}),
     ]
     last: BaseException | None = None
     for tool, args in attempts:
