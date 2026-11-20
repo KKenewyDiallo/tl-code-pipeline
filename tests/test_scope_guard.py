@@ -130,3 +130,20 @@ def test_diff_contre_origin_quand_les_fusions_sont_sur_develop(tmp_path):
     diff = asyncio.run(git_tools.diff_against_base(str(work)))
     assert modified_files(diff["diff"]) == ["hello.component.html"]
     assert diff["base"] == "develop"
+
+
+def test_branche_release_deja_sur_le_remote(tmp_path):
+    """Constat TOOLLIVE-3607 (relance) : push refusé car release/<change_id>
+    existait déjà sur GitLab ; remote_branch_exists permet de choisir un autre nom."""
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "develop", str(origin)], check=True)
+    work = tmp_path / "work"
+    subprocess.run(["git", "clone", "-q", str(origin), str(work)], check=True)
+    _git(work, "config", "user.email", "qa@test")
+    _git(work, "config", "user.name", "QA")
+    (work / "a.txt").write_text("x\n")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-qm", "init")
+    _git(work, "push", "-q", "origin", "HEAD:refs/heads/release/fix-typo")
+    assert asyncio.run(git_tools.remote_branch_exists(str(work), "release/fix-typo"))["exists"]
+    assert not asyncio.run(git_tools.remote_branch_exists(str(work), "release/autre"))["exists"]
