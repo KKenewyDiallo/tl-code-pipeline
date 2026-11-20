@@ -330,3 +330,17 @@ def test_entrypoint_accepts_jira_issue():
     params = inspect.signature(fn).parameters
     assert "jira_issue" in params
     assert params["jira_issue"].default == ""
+
+
+def test_entrypoint_request_is_optional():
+    import worker.workflows.spec_to_tests as m
+    fn = m.SpecToTests.run
+    while hasattr(fn, "__wrapped__"):
+        fn = fn.__wrapped__
+    params = inspect.signature(fn).parameters
+    assert "request" in params
+    assert params["request"].default == ""
+    # `repo` reste la seule entrée obligatoire
+    required = [n for n, p in params.items()
+                if n != "self" and p.default is inspect.Parameter.empty]
+    assert required == ["repo"]

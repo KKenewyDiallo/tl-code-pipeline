@@ -5,10 +5,12 @@ séquentielles → gate humaine finale → MR ouverte (merge manuel sur le forge
 Entrées :
     repo     : URL du repo cible (https://gitlab.com/<org>/<repo>.git — cloné
                dans `pipeline_workspace`) OU chemin local (mode dev)
-    request  : demande produit de l'humain, en langage naturel. Peut contenir
-               « MR <iid> » (ex. "repars de la MR 1585 : ...") pour compléter une
-               MR en cours : sa branche source devient la base de travail et le
-               push final la met à jour (la MR n'est pas recréée ni supprimée).
+    request  : demande produit de l'humain, en langage naturel (OPTIONNELLE :
+               vide = l'interview spec démarre de zéro, ou du seul contenu du
+               ticket JIRA). Peut contenir « MR <iid> » (ex. "repars de la MR
+               1585 : ...") pour compléter une MR en cours : sa branche source
+               devient la base de travail et le push final la met à jour (la MR
+               n'est pas recréée ni supprimée).
     jira_issue : clé d'un ticket JIRA (ex. "TOOLLIVE-3600"), lu via le connecteur
                MCP `atlassian` (@uses_connectors + activities/jira_tools.py) : le
                contenu du ticket alimente la demande, le ticket reçoit les
@@ -166,7 +168,11 @@ class SpecToTests:
             await jira_tools.jira_comment(jira_key, text)
 
     @workflows.workflow.entrypoint
-    async def run(self, repo: str, request: str, jira_issue: str = "") -> dict:
+    async def run(self, repo: str, request: str = "", jira_issue: str = "") -> dict:
+        # `request` est optionnelle : une exécution peut démarrer sans demande
+        # écrite (l'interview spec part alors de zéro, ou du seul ticket JIRA).
+        request = (request or "").strip()
+
         # ------------------------------------------------------------------
         # 0. WORKSPACE — URL (GitLab/GitHub) -> clone local ; sinon chemin local
         ws = await git_tools.ensure_workspace(repo)
@@ -189,7 +195,8 @@ class SpecToTests:
                 # JIRA sont de toute façon non bloquants.
                 request = (f"[Ticket JIRA {jira_key} illisible sous l'identité du run : "
                            f"{issue.get('error') or issue.get('reason')}]\n\n"
-                           f"Demande initiale :\n{request}")
+                           + (f"Demande initiale :\n{request}" if request
+                              else "(aucune demande initiale écrite)"))
             else:
                 comments_txt = "\n".join(
                     f"- {c['author'] or '?'}: {c['body'][:500]}" for c in issue["comments"][-10:])
@@ -200,7 +207,9 @@ class SpecToTests:
                     f"Assigné: {issue['assignee'] or '-'}\n\n"
                     f"Description du ticket :\n{issue['description'] or '(vide)'}"
                     + (f"\n\nCommentaires existants :\n{comments_txt}" if comments_txt else ""))
-                request = f"{ticket_block}\n\nDemande initiale :\n{request}"
+                request = (f"{ticket_block}\n\n"
+                           + (f"Demande initiale :\n{request}" if request
+                              else "(aucune demande initiale écrite)"))
                 start = await jira_tools.jira_transition_start(jira_key)
                 start_note = (f"Statut passé à « {start.get('to') or start.get('transition')} »."
                               if start.get("ok")
@@ -236,7 +245,9 @@ class SpecToTests:
         #    Seule garde : MAX_EMPTY_SPEC_ROUNDS tours consécutifs sans aucune
         #    progression (ni QUESTION ni CHANGE_ID) -> escalade anti boucle vide.
         self.phase = "spec"
-        self.conversation.append({"role": "human", "text": request})
+        self.conversation.append({"role": "human", "text": request or (
+            "[Aucune demande initiale fournie — interview de zéro : définis le besoin, "
+            "le contexte et les contraintes avec le développeur.]")})
         if mr_info:
             self.conversation.append({"role": "human", "text": (
                 f"[Contexte : reprise de la MR !{mr_info['iid']} ({mr_info['web_url']}) — "
