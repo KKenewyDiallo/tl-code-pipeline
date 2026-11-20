@@ -69,3 +69,35 @@ def test_branche_titre_commit_avec_cle_jira():
     assert jira_text.mr_title("", "", "fix-x") == "[fix-x] pipeline spec-to-tests"
     assert jira_text.commit_message("toollive-3611", "task t1: infobulle") == "TOOLLIVE-3611 task t1: infobulle"
     assert jira_text.commit_message("", "task t1") == "task t1"
+
+
+# ------------------------------------------- commentaire « Suivi » vivant ---
+
+def test_suivi_checklist_et_etapes():
+    steps = jira_text.new_follow_steps()
+    steps.update({"ticket": "done", "spec": "wait"})
+    t = jira_text.follow_text("TOOLLIVE-3611", "Statuts OEM", EXEC, steps,
+                              status_note="Statut passé à « devs-en-cours ».",
+                              detail=jira_text.spec_ready_text(""))
+    assert "Pipeline sur TOOLLIVE-3611" in t and EXEC[-8:] in t and EXEC not in t
+    assert "✅ Ticket lu" in t and "👀 Spec (à valider)" in t and "⬜ Développement" in t
+    assert "devs-en-cours" in t and "Spec prête" in t
+
+
+def test_suivi_lien_mr_et_conclusion():
+    steps = {"ticket": "done", "spec": "done", "dev": "done", "mr": "done", "review": "done"}
+    t = jira_text.follow_text("TOOLLIVE-3611", "x", EXEC, steps,
+                              mr_url="https://gitlab/mr/1602",
+                              end_note="✅ Review approuvée — merge manuel sur le forge.")
+    assert "✅ [MR](https://gitlab/mr/1602)" in t and t.endswith("merge manuel sur le forge.")
+
+
+def test_suivi_sans_commande_ni_chemin():
+    t = jira_text.follow_text("K-1", "x", EXEC, jira_text.new_follow_steps(),
+                              detail="Transcript : python scripts/status.py X\nok")
+    assert "python scripts" not in t and "ok" in t
+
+
+def test_suivi_statut():
+    assert jira_text.follow_status_note(True, "code-review") == "Statut passé à « code-review »."
+    assert "non modifié" in jira_text.follow_status_note(False)
