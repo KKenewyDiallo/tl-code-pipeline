@@ -546,24 +546,59 @@ async def jira_comment(issue_key: str, body: str,
     return await _comment(jira, issue_key, body)
 
 
+async def _find_comment_id(jira: ToolCallClient, issue_key: str, marker: str) -> str:
+    """Retrouve l'id du commentaire « Suivi » sur le ticket (le plus récent qui
+    contient `marker` = identifiant court de l'exécution). Constat TOOLLIVE-3613
+    (exécution f05f4b8e) : la réponse de addOrEditJiraIssueComment ne donnait pas
+    d'id exploitable -> un nouveau commentaire à chaque étape."""
+    if not marker:
+        return ""
+    try:
+        issue = await _call(jira, "getJiraIssue", cloudId=cloud_id(),
+                            issueIdOrKey=issue_key, fields=["comment"],
+                            responseContentFormat="markdown")
+    except Exception:
+        return ""
+    fields = issue.get("fields") or {} if isinstance(issue, dict) else {}
+    comments = ((fields.get("comment") or {}).get("comments")
+                or (issue.get("comments") if isinstance(issue, dict) else None) or [])
+    found = ""
+    for c in comments:
+        if not isinstance(c, dict) or c.get("id") in (None, ""):
+            continue
+        body = c.get("body")
+        text = _adf_to_text(body) if isinstance(body, dict) else str(body or "")
+        if marker in text and "Pipeline sur" in text:
+            found = str(c["id"])  # ordre chronologique : on garde le dernier
+    return found
+
+
 async def _follow_comment(jira: ToolCallClient, issue_key: str, body: str,
-                          comment_id: str = "") -> dict:
+                          comment_id: str = "", marker: str = "") -> dict:
     if comment_id:
         out = await _comment(jira, issue_key, body, comment_id)
         if out.get("ok"):
             return {**out, "edited": True}
+        edit_error = out.get("error", "")
+    else:
+        edit_error = ""
     out = await _comment(jira, issue_key, body)
-    return {**out, "edited": False}
+    if out.get("ok") and not out.get("id"):
+        out["id"] = await _find_comment_id(jira, issue_key, marker)
+    out = {**out, "edited": False}
+    if edit_error:
+        out["edit_error"] = edit_error
+    return out
 
 
 @workflows.activity()
-async def jira_follow(issue_key: str, body: str, comment_id: str = "",
+async def jira_follow(issue_key: str, body: str, comment_id: str = "", marker: str = "",
                       jira: ToolCallClient = Depends(atlassian_connector)) -> dict:
     """Commentaire « Suivi » vivant : créé une fois, puis MODIFIÉ à chaque étape
     (au lieu d'un nouveau commentaire par étape). Si la modification échoue
     (commentaire supprimé, outil v1 sans édition), en crée un nouveau.
     Non bloquant. Retourne {"ok", "id", "edited"}."""
-    return await _follow_comment(jira, issue_key, body, comment_id)
+    return await _follow_comment(jira, issue_key, body, comment_id, marker)
 
 
 @workflows.activity()

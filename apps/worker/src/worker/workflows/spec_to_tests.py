@@ -204,7 +204,8 @@ class SpecToTests:
             self.jira_ref or jira_key, self.jira_summary, self.execution_id,
             self.follow_steps, self.follow_status, self.follow_mr,
             self.follow_detail, self.follow_end)
-        out = await jira_tools.jira_follow(jira_key, body, self.follow_id)
+        out = await jira_tools.jira_follow(jira_key, body, self.follow_id,
+                                           self.execution_id[-8:])
         if out.get("ok"):
             self.follow_id = out.get("id") or ""
             self.follow_noid = not self.follow_id

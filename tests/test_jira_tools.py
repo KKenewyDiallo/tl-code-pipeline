@@ -551,4 +551,26 @@ def test_follow_edition_impossible_recree_un_commentaire():
     stub = StubClient({"addCommentToJiraIssue": {"id": "501"}},
                       fail_on=("addOrEditJiraIssueComment",))
     out = asyncio.run(jt._follow_comment(stub, "TOOLLIVE-3611", "v2", "500"))
-    assert out == {"ok": True, "id": "501", "edited": False}
+    assert out["ok"] and out["id"] == "501" and out["edited"] is False
+    assert "boom" in out["edit_error"]  # la raison du refus reste visible dans Studio
+
+
+def test_follow_retrouve_l_id_sur_le_ticket_si_la_reponse_n_en_a_pas():
+    """Constat TOOLLIVE-3613 (f05f4b8e) : réponse sans id -> 5 commentaires."""
+    issue = {"key": "TOOLLIVE-3613", "fields": {"comment": {"comments": [
+        {"id": "10", "body": "Autre commentaire"},
+        {"id": "11", "body": "🤖 **Pipeline sur TOOLLIVE-3613** Exécution `aaaaaaaa`"},
+        {"id": "12", "body": "🤖 **Pipeline sur TOOLLIVE-3613** Exécution `f05f4b8e`"},
+    ]}}}
+    stub = StubClient({"addCommentToJiraIssue": "Commentaire ajouté",
+                       "getJiraIssue": issue})
+    out = asyncio.run(jt._follow_comment(stub, "TOOLLIVE-3613", "v1", "", "f05f4b8e"))
+    assert out["ok"] and out["id"] == "12"
+    _, args = stub.calls[-1]
+    assert args["fields"] == ["comment"]
+
+
+def test_follow_id_introuvable_reste_vide():
+    stub = StubClient({"addCommentToJiraIssue": "ok", "getJiraIssue": {"key": "K-1", "fields": {}}})
+    out = asyncio.run(jt._follow_comment(stub, "K-1", "v1", "", "f05f4b8e"))
+    assert out["ok"] and out["id"] == ""

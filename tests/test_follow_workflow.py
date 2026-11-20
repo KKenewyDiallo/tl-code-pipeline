@@ -12,7 +12,7 @@ EXEC = "0138f8a419a25cb5b6a051345720296b69404fc2e7e3513b82a868ffaaadff55"
 def _run(monkeypatch, returned_id):
     calls = []
 
-    async def fake_follow(key, body, comment_id=""):
+    async def fake_follow(key, body, comment_id="", marker=""):
         calls.append({"key": key, "body": body, "comment_id": comment_id})
         return {"ok": True, "id": returned_id, "edited": bool(comment_id)}
 
