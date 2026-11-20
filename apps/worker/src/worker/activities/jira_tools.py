@@ -380,40 +380,73 @@ async def _comment(jira: ToolCallClient, issue_key: str, body: str) -> dict:
         return {"ok": False, "error": str(exc)[:300]}
 
 
+def _norm_status(name: Any) -> str:
+    """« In Progress », « in-progress », « IN_PROGRESS » -> « inprogress »."""
+    return re.sub(r"[\s_\-]+", "", str(name or "")).lower()
+
+
+def _transition_items(result: Any) -> list:
+    if isinstance(result, dict):
+        for key in ("transitions", "values", "results", "items"):
+            if isinstance(result.get(key), list):
+                return result[key]
+        return []
+    return result if isinstance(result, list) else []
+
+
+async def _call_variants(jira: ToolCallClient, tools: tuple[str, ...],
+                         variants: list[dict]) -> tuple[Any, list[str]]:
+    """Essaie chaque (outil, jeu d'arguments) jusqu'au premier succès. Les noms et
+    arguments diffèrent entre le connecteur builtin v1 et le serveur MCP v2
+    (mcp.atlassian.com/v2) : on ne devine pas, on essaie et on GARDE chaque erreur
+    complète (constat TOOLLIVE-3601 à 3611 : « connector tool call failed » sans
+    la raison, statut jamais changé alors que l'étape était verte)."""
+    errors: list[str] = []
+    for tool in tools:
+        for args in variants:
+            try:
+                return _parse_tool_result(await jira.call_tool(tool_name=tool, arguments=args)), errors
+            except Exception as exc:
+                errors.append(f"{tool}({', '.join(sorted(args))}): {_exc_text(exc)[:400]}")
+    raise RuntimeError(" | ".join(errors)[:1500])
+
+
 async def _transition(jira: ToolCallClient, issue_key: str, transition_name: str) -> dict:
-    """Transition de statut par NOM (ex. « In Progress », « code-review ») : résout
-    l'id via getTransitionsForJiraIssue (v2 : listJiraIssueTransitions) puis appelle
-    transitionJiraIssue (v1 : transition={"id": ...}, v2 : transitionId=...). Si la
-    transition n'est pas disponible sur le ticket : {"ok": False, "reason": ...}."""
+    """Transition de statut par NOM (ex. « devs-en-cours », « code-review ») :
+    liste les transitions possibles du ticket, choisit celle dont le nom ou le
+    statut d'arrivée correspond (sans tenir compte de la casse, des espaces et
+    des tirets), puis l'applique. Jamais bloquant : {"ok": False, ...} sinon,
+    avec la raison COMPLÈTE (ou la liste des transitions disponibles)."""
     if not transition_name:
         return {"ok": False, "reason": "nom de transition vide"}
+    cid = cloud_id()
     try:
-        transitions = await _call(jira, "getTransitionsForJiraIssue",
-                                  cloudId=cloud_id(), issueIdOrKey=issue_key)
-        items = transitions.get("transitions") if isinstance(transitions, dict) else transitions
-        wanted = transition_name.strip().lower()
-        match = None
-        for t in items or []:
-            names = {str(t.get("name", "")).lower(),
-                     str((t.get("to") or {}).get("name", "")).lower()}
-            if wanted in names:
-                match = t
-                break
-        if not match:
-            return {"ok": False,
-                    "reason": f"transition {transition_name!r} indisponible sur {issue_key}"}
-        try:
-            await _call(jira, "transitionJiraIssue",
-                        cloudId=cloud_id(), issueIdOrKey=issue_key,
-                        transition={"id": match["id"]})
-        except Exception:
-            await _call(jira, "transitionJiraIssue",
-                        cloudId=cloud_id(), issueIdOrKey=issue_key,
-                        transitionId=str(match["id"]))
-        return {"ok": True, "transition": match.get("name"),
-                "to": (match.get("to") or {}).get("name")}
+        listed, _ = await _call_variants(
+            jira, ("listJiraIssueTransitions", "getTransitionsForJiraIssue"),
+            [{"cloudId": cid, "issueIdOrKey": issue_key}, {"cloudId": cid, "issueKey": issue_key}])
     except Exception as exc:
-        return {"ok": False, "error": str(exc)[:300]}
+        return {"ok": False, "error": f"lecture des transitions : {exc}"[:1500]}
+    items = _transition_items(listed)
+    wanted = _norm_status(transition_name)
+    match = next((t for t in items if isinstance(t, dict) and wanted in {
+        _norm_status(t.get("name")), _norm_status((t.get("to") or {}).get("name"))}), None)
+    if not match:
+        available = sorted({str((t.get("to") or {}).get("name") or t.get("name"))
+                            for t in items if isinstance(t, dict)})
+        return {"ok": False,
+                "reason": (f"transition {transition_name!r} indisponible sur {issue_key} ; "
+                           f"disponibles : {', '.join(available) or 'aucune'}")}
+    tid = str(match.get("id"))
+    try:
+        await _call_variants(jira, ("transitionJiraIssue",), [
+            {"cloudId": cid, "issueIdOrKey": issue_key, "transitionId": tid},
+            {"cloudId": cid, "issueIdOrKey": issue_key, "transition": {"id": tid}},
+            {"cloudId": cid, "issueKey": issue_key, "transitionId": tid},
+        ])
+    except Exception as exc:
+        return {"ok": False, "error": f"transition {match.get('name')!r} (id {tid}) : {exc}"[:1500]}
+    return {"ok": True, "transition": match.get("name"),
+            "to": (match.get("to") or {}).get("name")}
 
 
 @workflows.activity()
@@ -450,13 +483,18 @@ async def jira_transition(issue_key: str, transition_name: str,
     return await _transition(jira, issue_key, transition_name)
 
 
+def start_transition_name() -> str:
+    return _env("jira_transition_start", "JIRA_TRANSITION_START") or "devs-en-cours"
+
+
 @workflows.activity()
 async def jira_transition_start(issue_key: str,
                                 jira: ToolCallClient = Depends(atlassian_connector)) -> dict:
     """Transition de démarrage du run : env `jira_transition_start` (défaut
-    « In Progress »)."""
-    name = _env("jira_transition_start", "JIRA_TRANSITION_START") or "In Progress"
-    return await _transition(jira, issue_key, name)
+    « devs-en-cours », statut de développement du workflow JIRA Toollive)."""
+    # Workflow JIRA Toollive : « In Progress » n'existe pas (constat 3601-3607),
+    # le statut de développement s'appelle « devs-en-cours ».
+    return await _transition(jira, issue_key, start_transition_name())
 
 
 @workflows.activity()
