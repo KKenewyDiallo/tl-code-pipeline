@@ -34,7 +34,7 @@ boucle tests bornée → fusions séquentielles → gate humaine finale → MR o
    pas tourner dans le worker (OOM killer même en `--runInBand`, ou outil de test
    introuvable genre `jest: not found` après un `npm ci` interrompu — RAM fixée
    par la plateforme), la gate de tests est NON bloquante : on poursuit jusqu'au
-   push de la branche `release/*` + MR, et c'est la CI de la MR qui valide.
+   push de la branche `ia-generated/*` + MR, et c'est la CI de la MR qui valide.
 4. **Boucles bornées** : `MAX_DEV_ITERATIONS = 3` (dev→tests), `MAX_AGENT_TURNS
    = 20` (boucle d'outils). Au-delà : escalade humaine, jamais de boucle infinie.
 5. **Gates humaines** : (a) approbation de `SPEC.md`, (b) review du
@@ -69,7 +69,7 @@ auto-détectée par repo (`test_runner.py::test_cmd_for`, override
 En mode cloud, `--repo` accepte une **URL GitLab** (résolue aussi via
 `gitlab_c8y_repo` / `gitlab_micro_repo`) : le worker clone le repo cible
 (`git_tools.ensure_workspace`, token `gitlab_token`), pousse
-`release/<change_id>` et ouvre une **Merge Request GitLab** (merge manuel après
+`ia-generated/<change_id>` et ouvre une **Merge Request GitLab** (merge manuel après
 approbation — pas de merge automatique). Pour **compléter une MR en cours**,
 mettre « MR <iid> » dans la demande (ex. `repars de la MR 1585 : ...`) : le
 pipeline fetch la branche source de la MR, travaille dessus, et push dessus à

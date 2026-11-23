@@ -227,7 +227,7 @@ class SpecToTests:
         # Mode « reprendre une MR en cours » : la demande contient « MR <iid> »
         # (ex. "repars de la MR 1585 : ...") -> on fetch la branche source de la MR
         # et on travaille dessus ; le push final met à jour CETTE MR (pas de
-        # nouvelle branche release ni de nouvelle MR).
+        # nouvelle branche ia-generated ni de nouvelle MR).
         mr_info = None
         if repo_url:
             m = re.search(r"\bMR\s*#?\s*(\d+)\b", request, re.IGNORECASE)
@@ -404,32 +404,32 @@ class SpecToTests:
             await git_tools.cleanup_worktree(repo, worktrees[task["id"]], f"agent/{task['id']}")
 
         # ------------------------------------------------------------------
-        # 6. GATE HUMAINE FINALE — branche release + MR GitLab + review du diff
+        # 6. GATE HUMAINE FINALE — branche ia-generated + MR GitLab + review du diff
         self.phase = "gate_review"
         final = await test_runner.run_tests(repo)
         diff = await git_tools.diff_against_base(repo)
         base = diff["base"]
-        release_branch = f"release/{change_id}"
+        generated_branch = f"ia-generated/{change_id}"
         mr = {"mr": None}
         if mr_info:
             # MR en cours : on push les fusions sur SA branche source (fast-forward)
             await git_tools.push_branch(repo, mr_info["source_branch"])
             mr = {"mr": {"iid": mr_info["iid"], "web_url": mr_info["web_url"]}}
         elif repo_url:
-            await git_tools.create_branch(repo, release_branch)
-            await git_tools.push_branch(repo, release_branch)
+            await git_tools.create_branch(repo, generated_branch)
+            await git_tools.push_branch(repo, generated_branch)
             mr_description = diff["diff"][:4000]
             if final.get("unrunnable"):
                 mr_description += ("\n\n---\nTests non exécutables dans le worker (OOM killer, "
                                    "RAM fixée par la plateforme) : gate sautée, à valider via "
                                    "la CI de cette MR.")
             mr = await git_tools.open_merge_request(
-                repo_url, release_branch, base,
+                repo_url, generated_branch, base,
                 title=f"[{change_id}] pipeline spec-to-tests",
                 description=mr_description,
             )
         push_target = ((await git_tools.current_branch(repo))["branch"] if repo_url
-                       else release_branch)
+                       else generated_branch)
         review_link = (mr["mr"] or {}).get("web_url") or f"{repo} (diff vs {base})"
         if jira_key:
             rev = await jira_tools.jira_transition_review(jira_key)
