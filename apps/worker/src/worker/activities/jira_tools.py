@@ -642,7 +642,7 @@ async def jira_transition_done(issue_key: str,
     return await _transition(jira, issue_key, name)
 
 
-async def _move(jira: ToolCallClient, issue_key: str, phase: str, by_human: bool) -> dict:
+async def _move(jira: ToolCallClient, issue_key: str, phase: str, by_human: bool = False) -> dict:
     """Changement de statut GARDÉ (workflow v4, voir jira_workflow.py) :
     1. statut visé = jira_workflow.status_for(phase) (vide = rien à faire) ;
     2. statut actuel lu sur le ticket ;
