@@ -5,10 +5,12 @@ séquentielles → gate humaine finale → MR ouverte (merge manuel sur le forge
 Entrées :
     repo     : URL du repo cible (https://gitlab.com/<org>/<repo>.git — cloné
                dans `pipeline_workspace`) OU chemin local (mode dev)
-    request  : demande produit de l'humain, en langage naturel. Peut contenir
-               « MR <iid> » (ex. "repars de la MR 1585 : ...") pour compléter une
-               MR en cours : sa branche source devient la base de travail et le
-               push final la met à jour (la MR n'est pas recréée ni supprimée).
+    request  : demande produit de l'humain, en langage naturel (OPTIONNELLE :
+               vide = l'interview spec démarre de zéro, ou du seul contenu du
+               ticket JIRA). Peut contenir « MR <iid> » (ex. "repars de la MR
+               1585 : ...") pour compléter une MR en cours : sa branche source
+               devient la base de travail et le push final la met à jour (la MR
+               n'est pas recréée ni supprimée).
     jira_issue : clé d'un ticket JIRA (ex. "TOOLLIVE-3600"), lu via le connecteur
                MCP `atlassian` (@uses_connectors + activities/jira_tools.py) : le
                contenu du ticket alimente la demande, le ticket reçoit les
@@ -248,7 +250,7 @@ class SpecToTests:
         await self._jira_note(jira_key, f"⛔ Bloqué — {reason}")
 
     @workflows.workflow.entrypoint
-    async def run(self, repo: str, request: str, jira_issue: str = "") -> dict:
+    async def run(self, repo: str, request: str = "", jira_issue: str = "") -> dict:
         """Pipeline complet ; toute erreur (escalade : planner vide, deadlock,
         régression après fusion, boucle dev non convergée...) passe le ticket en
         « blocked » avec le motif avant de faire échouer l'exécution."""
@@ -264,6 +266,10 @@ class SpecToTests:
             raise
 
     async def _run_pipeline(self, repo: str, request: str, jira_issue: str) -> dict:
+        # `request` est optionnelle : une exécution peut démarrer sans demande
+        # écrite (l'interview spec part alors de zéro, ou du seul ticket JIRA).
+        request = (request or "").strip()
+
         # ------------------------------------------------------------------
         # 0. WORKSPACE — URL (GitLab/GitHub) -> clone local ; sinon chemin local
         execution_id = workflows.get_execution_id()
@@ -287,7 +293,8 @@ class SpecToTests:
                 # JIRA sont de toute façon non bloquants.
                 request = (f"[Ticket JIRA {jira_key} illisible sous l'identité du run : "
                            f"{issue.get('error') or issue.get('reason')}]\n\n"
-                           f"Demande initiale :\n{request}")
+                           + (f"Demande initiale :\n{request}" if request
+                              else "(aucune demande initiale écrite)"))
             else:
                 comments_txt = "\n".join(
                     f"- {c['author'] or '?'}: {c['body'][:500]}" for c in issue["comments"][-10:])
@@ -306,11 +313,14 @@ class SpecToTests:
                         "prendre en compte si pertinent) :\n" + "\n".join(
                             f"- {p['title']} {p['url']}" + (f" — {p['excerpt']}" if p["excerpt"] else "")
                             for p in self.confluence_pages)
-                request = f"{ticket_block}\n\nDemande initiale :\n{request}"
+                request = (f"{ticket_block}\n\n"
+                           + (f"Demande initiale :\n{request}" if request
+                              else "(aucune demande initiale écrite)"))
                 # Workflow v4 : « Pris en charge » puis « Specs ». by_human=True :
                 # le run est lancé à la main (scripts/run.py --jira), ce lancement
                 # vaut décision humaine de prendre le ticket (ex. depuis « Nouveau »).
-                # Un futur déclenchement automatique devra passer by_human=False.
+                # Lancé par le scrutateur jira-watch : le ticket est déjà pris
+                # (by_human=False côté scrutateur) -> « start » est sans effet ici.
                 await self._move(jira_key, "start", by_human=True)
                 await self._move(jira_key, "spec")
                 await self._follow(jira_key, steps={"ticket": "done", "spec": "current"})
@@ -318,7 +328,7 @@ class SpecToTests:
         # Mode « reprendre une MR en cours » : la demande contient « MR <iid> »
         # (ex. "repars de la MR 1585 : ...") -> on fetch la branche source de la MR
         # et on travaille dessus ; le push final met à jour CETTE MR (pas de
-        # nouvelle branche release ni de nouvelle MR).
+        # nouvelle branche ia-generated ni de nouvelle MR).
         mr_info = None
         if repo_url:
             m = re.search(r"\bMR\s*#?\s*(\d+)\b", request, re.IGNORECASE)
@@ -336,7 +346,9 @@ class SpecToTests:
         #    Seule garde : MAX_EMPTY_SPEC_ROUNDS tours consécutifs sans aucune
         #    progression (ni QUESTION ni CHANGE_ID) -> escalade anti boucle vide.
         self.phase = "spec"
-        self.conversation.append({"role": "human", "text": request})
+        self.conversation.append({"role": "human", "text": request or (
+            "[Aucune demande initiale fournie — interview de zéro : définis le besoin, "
+            "le contexte et les contraintes avec le développeur.]")})
         if mr_info:
             self.conversation.append({"role": "human", "text": (
                 f"[Contexte : reprise de la MR !{mr_info['iid']} ({mr_info['web_url']}) — "
@@ -517,12 +529,12 @@ class SpecToTests:
             await git_tools.cleanup_worktree(repo, worktrees[task["id"]], f"agent/{task['id']}")
 
         # ------------------------------------------------------------------
-        # 6. GATE HUMAINE FINALE — branche release + MR GitLab + review du diff
+        # 6. GATE HUMAINE FINALE — branche ia-generated + MR GitLab + review du diff
         self.phase = "gate_review"
         final = await test_runner.run_tests(repo)
         diff = await git_tools.diff_against_base(repo)
         base = diff["base"]
-        release_branch = jira_text.release_branch(self.jira_ref, change_id)
+        generated_branch = jira_text.generated_branch(self.jira_ref, change_id)
         mr = {"mr": None}
         if mr_info:
             # MR en cours : on push les fusions sur SA branche source (fast-forward)
@@ -531,22 +543,22 @@ class SpecToTests:
         elif repo_url:
             # Branche déjà présente sur le forge (relance du même ticket : même
             # change_id) -> nom unique, sinon push refusé (non fast-forward).
-            if (await git_tools.remote_branch_exists(repo, release_branch))["exists"]:
-                release_branch = f"{release_branch}-{execution_id[-6:]}"
-            await git_tools.create_branch(repo, release_branch)
-            await git_tools.push_branch(repo, release_branch)
+            if (await git_tools.remote_branch_exists(repo, generated_branch))["exists"]:
+                generated_branch = f"{generated_branch}-{execution_id[-6:]}"
+            await git_tools.create_branch(repo, generated_branch)
+            await git_tools.push_branch(repo, generated_branch)
             mr_description = diff["diff"][:4000]
             if final.get("unrunnable"):
                 mr_description += ("\n\n---\nTests non exécutables dans le worker (OOM killer, "
                                    "RAM fixée par la plateforme) : gate sautée, à valider via "
                                    "la CI de cette MR.")
             mr = await git_tools.open_merge_request(
-                repo_url, release_branch, base,
+                repo_url, generated_branch, base,
                 title=jira_text.mr_title(self.jira_ref, self.jira_summary, change_id),
                 description=mr_description,
             )
         push_target = ((await git_tools.current_branch(repo))["branch"] if repo_url
-                       else release_branch)
+                       else generated_branch)
         review_link = (mr["mr"] or {}).get("web_url") or f"{repo} (diff vs {base})"
         hints = plan_hints(tasks)
         out_note = scope_note(modified_files(diff["diff"]), hints)

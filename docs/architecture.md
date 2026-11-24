@@ -80,7 +80,7 @@ langage naturel.
    `--runInBand`, ou outil de test introuvable genre `jest: not found` après un
    `npm ci` interrompu — RAM fixée par la plateforme), la gate est non bloquante
    (`unrunnable`, avec une réinstallation forcée des dépendances tentée une fois) :
-   on pousse quand même la branche `release/*` + MR, la CI valide les tests.
+   on pousse quand même la branche `ia-generated/*` + MR, la CI valide les tests.
 6. **GATE 2** — review du diff cumulé, signal `approve`/`reject`, puis MR laissée ouverte (merge manuel sur GitLab ; l'auto-merge échouait en HTTP 405).
 
 ## Intégration JIRA (connecteur MCP `atlassian`)
@@ -253,7 +253,7 @@ En mode cloud, les alias `c8y` / `micro` sont résolus via les variables
 d'env `gitlab_c8y_repo` / `gitlab_micro_repo` (URL GitLab des repos cibles).
 Le worker clone alors le repo cible dans `pipeline_workspace` avec
 `gitlab_token` (voir `git_tools.ensure_workspace`), pousse une branche
-`release/<change_id>`, ouvre une **Merge Request GitLab** (la gate de review
+`ia-generated/<change_id>`, ouvre une **Merge Request GitLab** (la gate de review
 finale = la review de la MR), la MR reste ouverte, merge manuel après le signal `approve`. Pour **compléter
 une MR en cours**, la demande contient « MR <iid> » : le worker fetch la branche
 source de la MR (`checkout_remote_branch`), les worktrees partent de là, et le
@@ -370,7 +370,7 @@ en priorité avec fallback sur ce nom — et les autres secrets (`gitlab_token`,
 
 **Les repos cibles (toollive-c8y, toollive-c8y-microservice) restent sur
 GitLab** : le worker les clone via leur URL + `gitlab_token`, pousse les
-branches `agent/*` et `release/<change_id>`, ouvre la MR via l'API (merge manuel)
+branches `agent/*` et `ia-generated/<change_id>`, ouvre la MR via l'API (merge manuel)
 GitLab. Aucun changement côté repos cibles.
 
 ## Variables d'environnement

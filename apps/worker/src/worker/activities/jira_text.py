@@ -138,12 +138,12 @@ def follow_status_note(transition_ok: bool, new_status: str = "") -> str:
 # majuscules) dans le nom de branche, le titre de la MR et les commits, pour que
 # JIRA relie tout seul la MR au ticket (panneau « Développement »).
 
-def release_branch(key: str, change_id: str) -> str:
+def generated_branch(key: str, change_id: str) -> str:
     if not key:
-        return f"release/{change_id}"
+        return f"ia-generated/{change_id}"
     key = key.upper()
     slug = re.sub(rf"^{re.escape(key)}[-_]?", "", change_id, flags=re.IGNORECASE).strip("-_")
-    return f"release/{key}-{slug}" if slug else f"release/{key}"
+    return f"ia-generated/{key}-{slug}" if slug else f"ia-generated/{key}"
 
 
 def mr_title(key: str, summary: str, change_id: str) -> str:

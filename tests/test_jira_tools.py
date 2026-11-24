@@ -574,3 +574,17 @@ def test_follow_id_introuvable_reste_vide():
     stub = StubClient({"addCommentToJiraIssue": "ok", "getJiraIssue": {"key": "K-1", "fields": {}}})
     out = asyncio.run(jt._follow_comment(stub, "K-1", "v1", "", "f05f4b8e"))
     assert out["ok"] and out["id"] == ""
+
+
+def test_entrypoint_request_is_optional():
+    import worker.workflows.spec_to_tests as m
+    fn = m.SpecToTests.run
+    while hasattr(fn, "__wrapped__"):
+        fn = fn.__wrapped__
+    params = inspect.signature(fn).parameters
+    assert "request" in params
+    assert params["request"].default == ""
+    # `repo` reste la seule entrée obligatoire
+    required = [n for n, p in params.items()
+                if n != "self" and p.default is inspect.Parameter.empty]
+    assert required == ["repo"]
