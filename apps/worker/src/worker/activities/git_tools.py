@@ -78,7 +78,10 @@ def extract_url_token(repo: str) -> tuple[str, str | None]:
     return repo, None
 
 
-_TOKEN_ENV_NAMES = ("gitlab_token", "pipeline_git_token")
+# Par ordre de priorité : `pipeline_git_token` (PAT propre à un déploiement, ex.
+# un déploiement de test qui ne peut pas re-binder `gitlab_token`, nom déjà pris)
+# l'emporte sur `gitlab_token` (secret partagé du workspace).
+_TOKEN_ENV_NAMES = ("pipeline_git_token", "gitlab_token")
 
 
 def _token_from_env() -> tuple[str | None, str | None]:
@@ -87,9 +90,10 @@ def _token_from_env() -> tuple[str | None, str | None]:
     nom minuscules conventionnel. Le token est nettoyé (strip) : un secret copié
     depuis un terminal peut embarquer un saut de ligne final, ce qui invaliderait le
     credential Basic. La valeur n'est jamais logguée, seul le nom de la variable."""
-    for key, val in os.environ.items():
-        if key.lower() in _TOKEN_ENV_NAMES and val and val.strip():
-            return val.strip(), key
+    for name in _TOKEN_ENV_NAMES:
+        for key, val in os.environ.items():
+            if key.lower() == name and val and val.strip():
+                return val.strip(), key
     return None, None
 
 
