@@ -68,9 +68,18 @@ TRANSITIONS: tuple[tuple[str, str, bool], ...] = (
 # 20 : BLOCKED -> statut précédent, humain seulement (voir check_transition).
 
 
+# Noms internes renvoyés par l'API JIRA pour certains statuts dont l'écran
+# affiche le nom traduit (constat TOOLLIVE-3621 : « Nouveau » lu « new » via le
+# connecteur -> garde « new » → « Pris en charge » refusée).
+_ALIASES = {"new": "nouveau", "open": "nouveau", "todo": "afaire", "done": "termine",
+            "terminé": "termine"}
+
+
 def norm(name: object) -> str:
-    """« In Progress », « in-progress », « IN_PROGRESS » -> « inprogress »."""
-    return re.sub(r"[\s_\-]+", "", str(name or "")).lower()
+    """« In Progress », « in-progress », « IN_PROGRESS » -> « inprogress » ;
+    noms internes JIRA ramenés au statut v4 (« new » -> « nouveau »)."""
+    key = re.sub(r"[\s_\-]+", "", str(name or "")).lower()
+    return _ALIASES.get(key, key)
 
 
 _EDGES: dict[tuple[str, str], bool] = {(norm(a), norm(b)): human for a, b, human in TRANSITIONS}

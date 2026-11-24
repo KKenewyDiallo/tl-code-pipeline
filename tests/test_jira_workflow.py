@@ -214,3 +214,14 @@ def test_move_refuse_trace_dans_le_transcript(monkeypatch):
     asyncio.run(w._move("TOOLLIVE-3620", "spec_approved"))
     assert "réservée à un humain" in w.conversation[-1]["text"]
     assert "non modifié" in w.follow_status
+
+
+def test_nom_interne_new_reconnu_comme_nouveau():
+    """Constat TOOLLIVE-3621 : l'API renvoie « new » pour « Nouveau »."""
+    from worker.activities import jira_workflow as jw
+    assert jw.norm("new") == jw.norm("Nouveau")
+    ok, why = jw.check_transition("new", "Pris en charge", by_human=True)
+    assert ok, why
+    assert jw.path_to("new", "Pris en charge", by_human=True) == ["A faire", "Pris en charge"]
+    ok, _ = jw.check_transition("new", "Pris en charge", by_human=False)
+    assert not ok  # Nouveau -> A faire reste une décision humaine
