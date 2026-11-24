@@ -166,6 +166,37 @@ sont renommés `listJiraIssueTransitions` / `addOrEditJiraIssueComment`, et
 Côté client (ton credential utilisateur) : `python scripts/jira.py '<JQL>'`
 recherche des tickets (JQL borné obligatoire), `--issue CLE` affiche le détail.
 
+### Scrutateur JIRA (`jira-watch`) — déclenchement automatique
+
+Workflow court (`workflows/jira_watch.py`, timeout 15 min) lancé par une
+**planification Studio** — rien ne tourne entre deux passages :
+
+```bash
+python scripts/schedule_watch.py --once --dry-run   # 1er essai : liste sans rien toucher
+python scripts/schedule_watch.py                    # planifie : */10 8-19 * * 1-5, Europe/Paris
+python scripts/schedule_watch.py --pause | --resume | --delete
+```
+
+À chaque passage :
+
+1. JQL `jira_watch_jql` (défaut `project = TOOLLIVE AND status = "A faire" AND
+   labels = agent ORDER BY priority DESC, created ASC`). Un ticket en
+   « Nouveau » n'est jamais pris (qualification = décision humaine).
+2. Repo cible d'après les étiquettes : `micro` / `microservice` → `micro`,
+   `c8y` → `c8y`, sinon `jira_watch_default_repo` (défaut `c8y`) ; alias résolu
+   via le secret `gitlab_<alias>_repo`. Non résolu → ticket ignoré et signalé.
+3. Le ticket est **pris d'abord** (« A faire » → « Pris en charge », garde v4,
+   `by_human=False`) : il sort de la JQL, donc jamais deux pipelines dessus,
+   même si deux passages se chevauchent. Refus de la garde → ticket ignoré.
+4. `spec-to-tests` démarre en exécution enfant détachée (ABANDON). Échec du
+   démarrage → ticket en « blocked » + commentaire avec le motif.
+5. Au plus `max_starts` (défaut 2) lancements par passage (RAM fixe du worker).
+
+Le rapport de chaque passage (lancés / ignorés + raison) est le résultat de
+l'exécution `jira-watch` dans Studio. Mentions « @agent » : pas encore gérées
+(la JQL ne voit pas les mentions de façon fiable) — l'étiquette `agent` est le
+déclencheur.
+
 ## Garanties
 
 - **Durabilité** : chaque activité est enregistrée ; un worker qui crashe
@@ -371,6 +402,8 @@ en majuscules, nom réservé injecté par le runtime managé.
 | `jira_transition_review` | ancien nom de `jira_status_review` (défaut `code-review`) |
 | `jira_transition_done` | ancien nom de `jira_status_done` (défaut vide = aucune ; merge manuel) |
 | `jira_transition_guard` | `off` désactive la garde du workflow v4 (défaut `on`) |
+| `jira_watch_jql` | JQL du scrutateur `jira-watch` (défaut : `A faire` + étiquette `agent`) |
+| `jira_watch_default_repo` | repo du scrutateur quand aucune étiquette `c8y`/`micro` (défaut `c8y`) |
 | `jira_connector_name` | ID/nom du connecteur MCP JIRA (défaut `01a1ef7f-0488-7652-934c-83b2eca95331` = `atlassian_94e0`, serveur mcp.atlassian.com/v2/mcp) |
 | `jira_credentials_name` | nom du credential épinglé par le slot connecteur (vide par défaut = credential par défaut du caller : user, puis workspace, puis organisation) |
 
