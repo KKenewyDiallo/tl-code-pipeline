@@ -76,6 +76,8 @@ import mistralai.workflows as workflows
 from mistralai.workflows import Depends
 from mistralai.workflows.plugins.mistralai.connectors import ConnectorSlot, ToolCallClient, connector
 
+from worker.activities import jira_workflow
+
 DEFAULT_JIRA_BASE_URL = "https://toollive.atlassian.net/jira"
 # Connecteur workspace `atlassian_94e0` (id 01a1ef49-...), serveur
 # https://mcp.atlassian.com/v2/mcp, auth au niveau du connecteur (service account).
@@ -638,6 +640,58 @@ async def jira_transition_done(issue_key: str,
     vide = aucune transition, le merge reste manuel)."""
     name = _env("jira_transition_done", "JIRA_TRANSITION_DONE") or ""
     return await _transition(jira, issue_key, name)
+
+
+async def _move(jira: ToolCallClient, issue_key: str, phase: str, by_human: bool) -> dict:
+    """Changement de statut GARDÉ (workflow v4, voir jira_workflow.py) :
+    1. statut visé = jira_workflow.status_for(phase) (vide = rien à faire) ;
+    2. statut actuel lu sur le ticket ;
+    3. garde : transition absente du workflow v4 ou réservée à un humain sans
+       décision humaine (`by_human`) -> refus, le ticket ne bouge pas ;
+    4. sinon chaque étape du plus court chemin autorisé est appliquée
+       (ex. Specs -> ready-for-dev -> devs-en-cours après la gate n°1).
+    Jamais bloquant : {"ok": False, "reason"/"error"} en cas de refus ou d'échec."""
+    target = jira_workflow.status_for(phase)
+    if not target:
+        return {"ok": False, "skipped": True, "reason": f"aucun statut configuré pour « {phase} »"}
+    if not jira_workflow.guard_enabled():
+        return await _transition(jira, issue_key, target)
+    try:
+        current = (await _fetch_issue(jira, issue_key)).get("status") or ""
+    except Exception as exc:
+        current = ""
+        unread = _exc_text(exc)[:300]
+    else:
+        unread = ""
+    allowed, why = jira_workflow.check_transition(current, target, by_human)
+    if not allowed:
+        return {"ok": False, "refused": True, "from": current, "to": target,
+                "reason": f"garde workflow v4 : {why}"
+                          + (f" (lecture du statut : {unread})" if unread else "")}
+    if jira_workflow.norm(current) == jira_workflow.norm(target):
+        return {"ok": True, "skipped": True, "from": current, "to": current}
+    if current and jira_workflow.norm(current) != jira_workflow.norm(jira_workflow.BLOCKED):
+        steps = jira_workflow.path_to(current, target, by_human)
+    else:
+        steps = [target]
+    out: dict = {"ok": False, "reason": "aucune étape"}
+    for step in steps:
+        out = await _transition(jira, issue_key, step)
+        if not out.get("ok"):
+            out.update({"from": current, "to": target, "failed_step": step})
+            return out
+    out.update({"from": current, "to": out.get("to") or target})
+    return out
+
+
+@workflows.activity()
+async def jira_move(issue_key: str, phase: str, by_human: bool = False,
+                    jira: ToolCallClient = Depends(atlassian_connector)) -> dict:
+    """Fait passer le ticket au statut de la phase `phase` du pipeline (start,
+    spec, spec_approved, spec_rejected, dev, tests, review, review_fix, done,
+    blocked), sous la garde du workflow v4. `by_human=True` uniquement quand le
+    pipeline exécute une décision humaine explicite (signal approve/reject/reply)."""
+    return await _move(jira, issue_key, phase, by_human)
 
 
 # ---------------------------------------------------------------- Confluence ---
