@@ -420,6 +420,57 @@ async def push_branch(repo: str, branch: str) -> dict:
     return res
 
 
+# URL d'une MR existante affichée par GitLab après un push
+# (« View merge request for <branche>: https://.../-/merge_requests/1608 ») ;
+# l'URL « .../merge_requests/new?... » (MR non créée) ne correspond pas.
+_MR_URL_RE = re.compile(r"https?://\S+?/-/merge_requests/(\d+)\b")
+
+
+def _one_line(text: str, limit: int) -> str:
+    """Une push option git ne peut pas contenir de saut de ligne."""
+    return " ".join(str(text or "").split())[:limit]
+
+
+def mr_push_options(target: str, title: str, description: str = "") -> list[str]:
+    """Push options GitLab qui ouvrent la MR au moment du push : seul le droit
+    `write_repository` est requis (pas le scope `api`)."""
+    opts = ["merge_request.create", f"merge_request.target={target}",
+            f"merge_request.title={_one_line(title, 255)}",
+            "merge_request.remove_source_branch"]
+    if description:
+        opts.append(f"merge_request.description={_one_line(description, 1000)}")
+    return [arg for opt in opts for arg in ("-o", opt)]
+
+
+def parse_mr_url(output: str) -> dict | None:
+    m = _MR_URL_RE.search(output or "")
+    return {"iid": int(m.group(1)), "web_url": m.group(0)} if m else None
+
+
+@workflows.activity()
+async def push_branch_with_mr(repo: str, branch: str, target: str,
+                              title: str, description: str = "") -> dict:
+    """Push la branche ET ouvre la MR via les push options GitLab
+    (`merge_request.create`) : fonctionne avec un token limité à
+    `read_repository` + `write_repository` (constat TOOLLIVE-3585 : token de
+    groupe sans scope `api` -> MR impossible via l'API). Les options ne
+    s'appliquent qu'à un push qui crée/met à jour la branche : à appeler pour
+    le PREMIER push. Retourne {"mr": {"iid", "web_url"} | None} — None si le
+    forge n'a pas créé de MR (forge non GitLab, options non supportées)."""
+    url = (await _sh(["git", "config", "remote.origin.url"], repo))["output"].strip()
+    res = await _sh(["git", "push", *mr_push_options(target, title, description),
+                     _authed_url(url), f"HEAD:refs/heads/{branch}"],
+                    repo, extra_env=_git_env())
+    if res["code"] != 0 and "push options" in res["output"]:
+        # Forge sans push options (« receiving end does not support push
+        # options ») : push simple, la MR passera par l'API.
+        res = await _sh(["git", "push", _authed_url(url), f"HEAD:refs/heads/{branch}"],
+                        repo, extra_env=_git_env())
+    if res["code"] != 0:
+        raise RuntimeError(f"push {branch} failed: {_scrub(res['output'])}")
+    return {"mr": parse_mr_url(res["output"])}
+
+
 @workflows.activity()
 async def diff_against_base(worktree: str) -> dict:
     """Diff de la branche courante contre la branche de base détectée."""

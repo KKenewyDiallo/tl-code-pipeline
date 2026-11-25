@@ -546,17 +546,25 @@ class SpecToTests:
             if (await git_tools.remote_branch_exists(repo, generated_branch))["exists"]:
                 generated_branch = f"{generated_branch}-{execution_id[-6:]}"
             await git_tools.create_branch(repo, generated_branch)
-            await git_tools.push_branch(repo, generated_branch)
-            mr_description = diff["diff"][:4000]
-            if final.get("unrunnable"):
-                mr_description += ("\n\n---\nTests non exécutables dans le worker (OOM killer, "
-                                   "RAM fixée par la plateforme) : gate sautée, à valider via "
-                                   "la CI de cette MR.")
-            mr = await git_tools.open_merge_request(
-                repo_url, generated_branch, base,
-                title=jira_text.mr_title(self.jira_ref, self.jira_summary, change_id),
-                description=mr_description,
-            )
+            mr_title = jira_text.mr_title(self.jira_ref, self.jira_summary, change_id)
+            tests_note = ("Tests non exécutables dans le worker (OOM killer, "
+                          "RAM fixée par la plateforme) : gate sautée, à valider via "
+                          "la CI de cette MR.") if final.get("unrunnable") else ""
+            # MR ouverte au push (push options GitLab) : marche sans le scope
+            # `api` (constat TOOLLIVE-3585). L'API reste le secours.
+            push_description = " ".join(filter(None, (
+                f"Ticket {self.jira_ref}." if self.jira_ref else "",
+                f"Généré par code-pipeline (exécution {execution_id[-8:]}).", tests_note)))
+            mr = await git_tools.push_branch_with_mr(
+                repo, generated_branch, base, title=mr_title, description=push_description)
+            if not mr.get("mr"):
+                mr_description = diff["diff"][:4000]
+                if tests_note:
+                    mr_description += f"\n\n---\n{tests_note}"
+                mr = await git_tools.open_merge_request(
+                    repo_url, generated_branch, base,
+                    title=mr_title, description=mr_description,
+                )
         push_target = ((await git_tools.current_branch(repo))["branch"] if repo_url
                        else generated_branch)
         review_link = (mr["mr"] or {}).get("web_url") or f"{repo} (diff vs {base})"
