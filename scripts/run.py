@@ -1,10 +1,14 @@
 """Déclenche une exécution du pipeline spec-to-tests.
 
 Usage :
-    python scripts/run.py "<demande produit>" [--repo c8y|micro|<URL ou chemin>]
+    python scripts/run.py ["<demande produit>"] [--repo c8y|micro|<URL ou chemin>]
+
+La demande produit est optionnelle : sans elle, l'interview spec démarre de
+zéro (ou du seul contenu du ticket JIRA passé avec --jira).
 
 Exemples :
     python scripts/run.py "Ajouter un icone de recherche dans le tl-input" --repo c8y
+    python scripts/run.py --repo c8y --jira TOOLLIVE-3600   # demande = ticket JIRA seul
     # Reprendre/compléter une MR en cours (travaille sur sa branche source, la met à jour) :
     python scripts/run.py "repars de la MR 1585 : applique les retours de code review" --repo c8y
     python scripts/run.py "Exposer le statut OEM dans le microservice" --repo micro
@@ -88,7 +92,9 @@ REPOS = {
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("request", help="demande produit, en langage naturel")
+    parser.add_argument("request", nargs="?", default="",
+                        help="demande produit, en langage naturel (optionnelle : "
+                             "l'interview spec démarre alors de zéro)")
     parser.add_argument(
         "--repo",
         default=(os.environ.get("pipeline_repo") or os.environ.get("PIPELINE_REPO")
@@ -113,9 +119,14 @@ def main() -> None:
     client = Mistral(api_key=os.environ.get("mistral_api_key")
                      or os.environ.get("MISTRAL_API_KEY"))
     jira_info = _fetch_issue_brief(client, args.jira) if args.jira else None
+    # `request` optionnelle : clé omise de l'input quand vide pour laisser la
+    # valeur par défaut du workflow s'appliquer.
+    input_data = {"repo": repo, "jira_issue": args.jira}
+    if args.request:
+        input_data["request"] = args.request
     execution = client.workflows.execute_workflow(
         workflow_identifier="spec-to-tests",
-        input={"repo": repo, "request": args.request, "jira_issue": args.jira},
+        input=input_data,
         wait_for_result=False,
     )
     print(json.dumps({"execution_id": execution.execution_id, "repo": repo_display,

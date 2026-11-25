@@ -34,7 +34,7 @@ boucle tests bornée → fusions séquentielles → gate humaine finale → MR o
    pas tourner dans le worker (OOM killer même en `--runInBand`, ou outil de test
    introuvable genre `jest: not found` après un `npm ci` interrompu — RAM fixée
    par la plateforme), la gate de tests est NON bloquante : on poursuit jusqu'au
-   push de la branche `release/*` + MR, et c'est la CI de la MR qui valide.
+   push de la branche `ia-generated/*` + MR, et c'est la CI de la MR qui valide.
 4. **Boucles bornées** : `MAX_DEV_ITERATIONS = 3` (dev→tests), `MAX_AGENT_TURNS
    = 20` (boucle d'outils). Au-delà : escalade humaine, jamais de boucle infinie.
 5. **Gates humaines** : (a) approbation de `SPEC.md`, (b) review du
@@ -69,7 +69,7 @@ auto-détectée par repo (`test_runner.py::test_cmd_for`, override
 En mode cloud, `--repo` accepte une **URL GitLab** (résolue aussi via
 `gitlab_c8y_repo` / `gitlab_micro_repo`) : le worker clone le repo cible
 (`git_tools.ensure_workspace`, token `gitlab_token`), pousse
-`release/<change_id>` et ouvre une **Merge Request GitLab** (merge manuel après
+`ia-generated/<change_id>` et ouvre une **Merge Request GitLab** (merge manuel après
 approbation — pas de merge automatique). Pour **compléter une MR en cours**,
 mettre « MR <iid> » dans la demande (ex. `repars de la MR 1585 : ...`) : le
 pipeline fetch la branche source de la MR, travaille dessus, et push dessus à
@@ -93,6 +93,21 @@ notification via `open_approval` (webhook `approval_webhook_url`).
 - Le contenu du ticket (description + commentaires) est prépendu à la demande de
   l'agent spec ; chaque gate est commentée sur le ticket ; à l'ouverture de la
   MR, transition + commentaire avec le lien MR ; commentaire final en sortie.
+- **Workflow JIRA v4 avec gardes** (`activities/jira_workflow.py`, activité
+  `jira_move`) : un statut par phase (Pris en charge → Specs → ready-for-dev →
+  devs-en-cours → Tests auto → code-review ⇄ code-review-in-progress), `blocked`
+  + motif sur toute sortie en échec. Garde côté code : transition absente du
+  tableau v4 ou réservée à un humain sans signal humain explicite → refusée, le
+  ticket ne bouge pas. L'agent ne valide jamais (gates, recette, prod = humains).
+- **Scrutateur JIRA** (workflow `jira-watch`, `workflows/jira_watch.py`) :
+  passage court planifié dans Studio (`python scripts/schedule_watch.py`, défaut
+  toutes les 10 min lun-ven 8h-19h Europe/Paris). JQL `jira_watch_jql` (défaut :
+  `A faire` + étiquette `agent`). Pour chaque ticket : prise « A faire » →
+  « Pris en charge » sous la garde v4 (by_human=False) AVANT de lancer
+  `spec-to-tests` en enfant détaché — le ticket sort de la JQL, jamais deux
+  pipelines sur le même ticket. Repo d'après les étiquettes (`micro` /
+  `microservice` / `c8y`, sinon `jira_watch_default_repo`), résolu via
+  `gitlab_<alias>_repo`. Au plus `max_starts` (2) lancements par passage.
 - **Jamais de credential JIRA dans le code, les logs ni une URL** : résolution
   par la plateforme selon l'identité du run — credential utilisateur en local
   (`mistral dev`) ; **credential `atlassian` au scope workspace requis** pour
@@ -108,8 +123,10 @@ notification via `open_approval` (webhook `approval_webhook_url`).
   d'outils passent par la gateway du connecteur, qui résout côté serveur le
   credential épinglé par `credentials_name` si `jira_credentials_name` est
   défini, sinon le credential par défaut du caller (user, puis workspace, puis
-  organisation). Nom du connecteur : env `jira_connector_name` (défaut
-  `atlassian` ; le nom Studio peut être suffixé, ex. `atlassian_47af`).
+  organisation). Nom/ID du connecteur : env `jira_connector_name` (défaut
+  `01a1ef7f-0488-7652-934c-83b2eca95331` = connecteur workspace `atlassian_94e0`,
+  serveur `https://mcp.atlassian.com/v2/mcp`, auth au niveau du connecteur donc
+  utilisable par le service account d'un déploiement managé).
   Quand aucun credential n'est utilisable sous l'identité du run (connecteur
   OAuth user-only en déploiement managé), l'appel d'outil renvoie 401
   « Authentication failed against MCP server while calling tool » (exécution
@@ -118,13 +135,27 @@ notification via `open_approval` (webhook `approval_webhook_url`).
   "connector_unavailable"}` et le run continue sans le ticket — JIRA ne doit
   jamais tuer le pipeline (commentaires/transitions déjà non bloquants) ; un
   ticket introuvable (mauvaise clé) reste fatal.
+  Même traitement quand la gateway répond 200 mais que le tool MCP renvoie une
+  erreur d'auth dans son contenu (`ConnectorToolCallError`, réponse dans
+  `details`, invisible dans `str(exc)`) — ex. « You don't have permission to
+  connect via API token. Please ask your organization admin for access. »
+  (connecteur `atlassian_94e0` authentifié par API token refusé par l'org ;
+  exécution `0138f8a4...767f50` / run `01a1ef65-f20c-728a-957f-da137a617e40`) :
+  `_is_connector_unavailable` inspecte `str(exc)` ET le texte des `details`.
+  Même traitement pour une erreur de scopes insuffisants renvoyée dans le contenu
+  du tool (403 « Insufficient scopes for "getJiraIssue". Required:
+  [read:jira:agent-interface] » — credential résolu sur le connecteur
+  `atlassian_49bb` sans le scope demandé ; exécution `0138f8a4...c2740` / run
+  `01a1ef8e-f451-75d8-b273-e66aae99cec2`) : marqueur « insufficient scope » dans
+  `_CONNECTOR_UNAVAILABLE_MARKERS`. Une 403 au niveau du ticket (mauvaise clé)
+  reste fatale.
 - Env (minuscules, fallback majuscules) : `jira_base_url` (défaut
   `https://toollive.atlassian.net/jira`), `jira_cloud_id` (UUID ou host du site),
-  `jira_transition_start` (défaut « In Progress »), `jira_transition_review`
+  `jira_transition_start` (défaut « Pris en charge » ; alias `jira_status_start`), `jira_transition_review`
   (défaut « code-review »), `jira_transition_done` (défaut vide = aucune),
   `jira_credentials_name` (nom du credential épinglé par le slot connecteur ;
   vide par défaut = credential par défaut du caller), `jira_connector_name`
-  (nom du connecteur MCP, défaut `atlassian`).
+  (ID/nom du connecteur MCP, défaut `01a1ef49-…` = `atlassian_94e0`).
 - `scripts/jira.py` = recherche/lecture de tickets côté client (ton credential :
   `python scripts/jira.py 'project = TOOLLIVE AND created >= -14d ORDER BY created DESC'`).
 - Tests : `uv run --with pytest python -m pytest tests/ -q`.

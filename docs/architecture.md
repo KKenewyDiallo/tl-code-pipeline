@@ -80,15 +80,17 @@ langage naturel.
    `--runInBand`, ou outil de test introuvable genre `jest: not found` après un
    `npm ci` interrompu — RAM fixée par la plateforme), la gate est non bloquante
    (`unrunnable`, avec une réinstallation forcée des dépendances tentée une fois) :
-   on pousse quand même la branche `release/*` + MR, la CI valide les tests.
+   on pousse quand même la branche `ia-generated/*` + MR, la CI valide les tests.
 6. **GATE 2** — review du diff cumulé, signal `approve`/`reject`, puis MR laissée ouverte (merge manuel sur GitLab ; l'auto-merge échouait en HTTP 405).
 
 ## Intégration JIRA (connecteur MCP `atlassian`)
 
 Le workflow `spec-to-tests` déclare le slot
 `connector(<jira_connector_name>, run_as="deployment", auto_auth=False, ...)`
-(`activities/jira_tools.py::atlassian_connector`, nom du connecteur par défaut
-`atlassian` — le nom Studio peut être suffixé, ex. `atlassian_47af`) et l'attache via
+(`activities/jira_tools.py::atlassian_connector`, connecteur par défaut
+`01a1ef7f-0488-7652-934c-83b2eca95331` = `atlassian_94e0`, serveur
+`https://mcp.atlassian.com/v2/mcp`, auth au niveau du connecteur — utilisable par
+le service account d'un déploiement managé ; surcharge via `jira_connector_name`) et l'attache via
 `@uses_connectors(atlassian_connector)` (placé après `@workflow.define`).
 Aucun credential dans le code : la plateforme résout les credentials au runtime
 selon l'identité du run — credential **utilisateur** en local (`mistral dev`) ;
@@ -123,25 +125,77 @@ Déroulement quand un ticket est lié :
    ticket est introuvable (mauvaise clé en entrée) ; si le connecteur est
    indisponible sous l'identité du run (401/403), retourne `{"ok": False, ...}`
    et le pipeline continue sans le ticket.
-2. `jira_transition_start` (env `jira_transition_start`, défaut « In Progress »)
-   + commentaire de démarrage avec l'`execution_id` et les commandes humaines
-   (`scripts/status.py|approve.py|talk.py`).
-3. Chaque gate humaine (`_gate`) poste aussi un commentaire JIRA
-   (`addCommentToJiraIssue`, markdown).
-4. À l'ouverture de la MR : `jira_transition_review` (défaut « code-review ») +
-   commentaire avec le lien de la MR.
-5. Sorties du run : commentaire final (approuvé / rejeté / timeout / escalade) +
-   `jira_transition_done` si défini (défaut vide — le merge reste manuel).
+2. Statuts du **workflow JIRA v4** (`activities/jira_workflow.py`), appliqués par
+   l'activité `jira_move` à chaque phase, sous une **garde côté code** :
+
+   | Phase du pipeline | Statut (env `jira_status_<phase>`) | Décision humaine |
+   |---|---|---|
+   | `start` : run lancé | `Pris en charge` (ou `jira_transition_start`) | oui (lancement manuel) |
+   | `spec` : interview + SPEC.md | `Specs` | |
+   | `spec_approved` : gate n°1 approuvée | `ready-for-dev` | oui |
+   | `spec_rejected` : spec rejetée | `Pris en charge` | oui |
+   | `dev` : tâches en parallèle | `devs-en-cours` | |
+   | `tests` : fusions + suite complète | `Tests auto` | |
+   | `review` : MR ouverte / re-poussée | `code-review` (ou `jira_transition_review`) | |
+   | `review_fix` : retour de review | `code-review-in-progress` | oui |
+   | `done` : gate n°2 approuvée | vide par défaut (ou `jira_transition_done`) | oui |
+   | `blocked` : erreur, escalade, timeout, rejet de review | `blocked` + motif dans le « Suivi » | |
+
+   La garde (`check_transition`) refuse toute transition absente du workflow v4
+   (plus de « N'importe lequel ») et toute transition réservée à un humain quand
+   le pipeline n'exécute pas un signal humain explicite (`by_human`). Elle
+   rattrape au plus 2 crans (ex. `Specs` → `ready-for-dev` → `devs-en-cours`),
+   jamais une phase entière. `code-review` exige une MR. Refus ou échec = non
+   bloquant, raison dans le transcript et dans le « Suivi ». Repli d'urgence :
+   `jira_transition_guard=off`.
+3. Chaque gate humaine (`_gate`) met à jour le commentaire « Suivi ».
+4. À l'ouverture de la MR : statut `review` + Rapport QA avec le lien de la MR.
+5. Sorties du run : conclusion dans le « Suivi » ; toute sortie en échec passe le
+   ticket en `blocked` (y compris une exception, avant de faire échouer l'exécution).
 
 Commentaires et transitions sont **non bloquants** (ils retournent
 `{"ok": False, ...}` sans faire échouer le run). Outils MCP utilisés :
 `getJiraIssue`, `searchJiraIssuesUsingJql`, `getTransitionsForJiraIssue`,
-`addCommentToJiraIssue`, `transitionJiraIssue`. `cloudId` = env `jira_cloud_id`
+`addCommentToJiraIssue`, `transitionJiraIssue` (sur le serveur v2 ces deux derniers
+sont renommés `listJiraIssueTransitions` / `addOrEditJiraIssueComment`, et
+`transitionJiraIssue` prend `transitionId` — fallbacks gérés dans
+`jira_tools._call` / `_transition`). `cloudId` = env `jira_cloud_id`
 (UUID ou host du site), sinon le host de `jira_base_url` (défaut
 `https://toollive.atlassian.net/jira`).
 
 Côté client (ton credential utilisateur) : `python scripts/jira.py '<JQL>'`
 recherche des tickets (JQL borné obligatoire), `--issue CLE` affiche le détail.
+
+### Scrutateur JIRA (`jira-watch`) — déclenchement automatique
+
+Workflow court (`workflows/jira_watch.py`, timeout 15 min) lancé par une
+**planification Studio** — rien ne tourne entre deux passages :
+
+```bash
+python scripts/schedule_watch.py --once --dry-run   # 1er essai : liste sans rien toucher
+python scripts/schedule_watch.py                    # planifie : */10 8-19 * * 1-5, Europe/Paris
+python scripts/schedule_watch.py --pause | --resume | --delete
+```
+
+À chaque passage :
+
+1. JQL `jira_watch_jql` (défaut `project = TOOLLIVE AND status = "A faire" AND
+   labels = agent ORDER BY priority DESC, created ASC`). Un ticket en
+   « Nouveau » n'est jamais pris (qualification = décision humaine).
+2. Repo cible d'après les étiquettes : `micro` / `microservice` → `micro`,
+   `c8y` → `c8y`, sinon `jira_watch_default_repo` (défaut `c8y`) ; alias résolu
+   via le secret `gitlab_<alias>_repo`. Non résolu → ticket ignoré et signalé.
+3. Le ticket est **pris d'abord** (« A faire » → « Pris en charge », garde v4,
+   `by_human=False`) : il sort de la JQL, donc jamais deux pipelines dessus,
+   même si deux passages se chevauchent. Refus de la garde → ticket ignoré.
+4. `spec-to-tests` démarre en exécution enfant détachée (ABANDON). Échec du
+   démarrage → ticket en « blocked » + commentaire avec le motif.
+5. Au plus `max_starts` (défaut 2) lancements par passage (RAM fixe du worker).
+
+Le rapport de chaque passage (lancés / ignorés + raison) est le résultat de
+l'exécution `jira-watch` dans Studio. Mentions « @agent » : pas encore gérées
+(la JQL ne voit pas les mentions de façon fiable) — l'étiquette `agent` est le
+déclencheur.
 
 ## Garanties
 
@@ -199,7 +253,7 @@ En mode cloud, les alias `c8y` / `micro` sont résolus via les variables
 d'env `gitlab_c8y_repo` / `gitlab_micro_repo` (URL GitLab des repos cibles).
 Le worker clone alors le repo cible dans `pipeline_workspace` avec
 `gitlab_token` (voir `git_tools.ensure_workspace`), pousse une branche
-`release/<change_id>`, ouvre une **Merge Request GitLab** (la gate de review
+`ia-generated/<change_id>`, ouvre une **Merge Request GitLab** (la gate de review
 finale = la review de la MR), la MR reste ouverte, merge manuel après le signal `approve`. Pour **compléter
 une MR en cours**, la demande contient « MR <iid> » : le worker fetch la branche
 source de la MR (`checkout_remote_branch`), les worktrees partent de là, et le
@@ -316,7 +370,7 @@ en priorité avec fallback sur ce nom — et les autres secrets (`gitlab_token`,
 
 **Les repos cibles (toollive-c8y, toollive-c8y-microservice) restent sur
 GitLab** : le worker les clone via leur URL + `gitlab_token`, pousse les
-branches `agent/*` et `release/<change_id>`, ouvre la MR via l'API (merge manuel)
+branches `agent/*` et `ia-generated/<change_id>`, ouvre la MR via l'API (merge manuel)
 GitLab. Aucun changement côté repos cibles.
 
 ## Variables d'environnement
@@ -343,10 +397,14 @@ en majuscules, nom réservé injecté par le runtime managé.
 | `DEPLOYMENT_NAME` | nom du déploiement worker (requis au boot ; routage des exécutions) |
 | `jira_base_url` | URL du site Jira (défaut `https://toollive.atlassian.net/jira`) — sert aussi à construire les URL de tickets |
 | `jira_cloud_id` | cloudId Atlassian (UUID ou host du site, ex. `toollive.atlassian.net`) ; sinon host de `jira_base_url` |
-| `jira_transition_start` | transition JIRA au démarrage du run sur le ticket (défaut `In Progress`) |
-| `jira_transition_review` | transition à l'ouverture de la MR (défaut `code-review`) |
-| `jira_transition_done` | transition finale après approbation (défaut vide = aucune ; merge manuel) |
-| `jira_connector_name` | nom du connecteur MCP JIRA (défaut `atlassian` ; le nom Studio peut être suffixé, ex. `atlassian_47af`) |
+| `jira_status_<phase>` | statut JIRA visé par phase (`start`, `spec`, `spec_approved`, `spec_rejected`, `dev`, `tests`, `review`, `review_fix`, `done`, `blocked`) — défauts du workflow v4, voir `jira_workflow.PHASES` |
+| `jira_transition_start` | ancien nom de `jira_status_start` (défaut `Pris en charge`) |
+| `jira_transition_review` | ancien nom de `jira_status_review` (défaut `code-review`) |
+| `jira_transition_done` | ancien nom de `jira_status_done` (défaut vide = aucune ; merge manuel) |
+| `jira_transition_guard` | `off` désactive la garde du workflow v4 (défaut `on`) |
+| `jira_watch_jql` | JQL du scrutateur `jira-watch` (défaut : `A faire` + étiquette `agent`) |
+| `jira_watch_default_repo` | repo du scrutateur quand aucune étiquette `c8y`/`micro` (défaut `c8y`) |
+| `jira_connector_name` | ID/nom du connecteur MCP JIRA (défaut `01a1ef7f-0488-7652-934c-83b2eca95331` = `atlassian_94e0`, serveur mcp.atlassian.com/v2/mcp) |
 | `jira_credentials_name` | nom du credential épinglé par le slot connecteur (vide par défaut = credential par défaut du caller : user, puis workspace, puis organisation) |
 
 ## Points à brancher (TODO restants)

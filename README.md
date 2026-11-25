@@ -57,7 +57,7 @@ python scripts/approve.py <execution_id> approve               # valider une gat
 ```
 
 En mode cloud, le pipeline clone le repo cible GitLab, ouvre une Merge Request
-`release/<change_id>` (review finale dans GitLab) — MR laissée ouverte, merge manuel après `approve`.
+`ia-generated/<change_id>` (review finale dans GitLab) — MR laissée ouverte, merge manuel après `approve`.
 Déploiement du worker : managé (miroir GitHub, `deploy/docker/Dockerfile.worker`)
 ou self-hosted (CI GitLab + Helm chart) — voir `docs/architecture.md`.
 

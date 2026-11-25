@@ -6,8 +6,8 @@ Usage :
     python scripts/jira.py --max 50 'created >= -7d ORDER BY created DESC'
 
 Le script tourne sous TON identité avec TON credential du connecteur
-(`jira_connector_name`, défaut `atlassian` — le nom Studio peut être suffixé,
-ex. `atlassian_47af` ; Studio > Connectors, l'authentification se fait dans le
+(`jira_connector_name`, défaut `01a1ef7f-0488-7652-934c-83b2eca95331` =
+`atlassian_94e0` ; Studio > Connectors, l'authentification se fait dans le
 navigateur au premier usage). cloudId : env `jira_cloud_id`, sinon le host de
 `jira_base_url` (défaut https://toollive.atlassian.net/jira).
 
@@ -27,7 +27,7 @@ DEFAULT_JIRA_BASE_URL = "https://toollive.atlassian.net/jira"
 
 def _connector_name() -> str:
     return (os.environ.get("jira_connector_name") or os.environ.get("JIRA_CONNECTOR_NAME")
-            or "atlassian")
+            or "01a1ef7f-0488-7652-934c-83b2eca95331")
 
 
 def _cloud_id() -> str:
