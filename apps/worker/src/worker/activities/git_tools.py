@@ -232,7 +232,9 @@ async def _forge_pat_verdict(repo: str) -> str:
         return f"verdict API du forge indisponible ({err[:120]}) — PAT non vérifiable par l'API"
     user = res.get("username") or res.get("name") or "?"
     return (f"verdict API du forge : PAT accepté (user={user}) mais refusé par le git over "
-            f"HTTPS — scope `read_repository` manquant sur le PAT du secret `gitlab_token`")
+            f"HTTPS — scope `read_repository` manquant sur le PAT du secret `gitlab_token` "
+            f"(scopes requis pour git: read_repository, write_repository, api). "
+            f"Recréer le secret avec ces scopes sur https://gitlab.toollive.bearstech.com/-/profile/personal_access_tokens")
 
 
 async def _probe_remote_auth(repo: str) -> None:
@@ -324,8 +326,8 @@ async def ensure_workspace(repo: str, run_id: str = "") -> dict:
                 if src:
                     hints.append(f"PAT refusé par le forge (secret lu depuis la variable "
                                  f"`{src}`) — vérifier la valeur du secret `gitlab_token` "
-                                 f"(expiré/révoqué ?) et ses scopes read_repository/"
-                                 f"write_repository/api")
+                                 f"(expiré/révoqué ?) et ses scopes (read_repository, write_repository, api). "
+                                 f"Recréer le secret sur https://gitlab.toollive.bearstech.com/-/profile/personal_access_tokens")
                 else:
                     hints.append("aucun PAT trouvé dans l'env du worker (variables "
                                  "`gitlab_token`/`GITLAB_TOKEN`/`pipeline_git_token` non "
